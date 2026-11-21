@@ -18,7 +18,12 @@
         }
     },
     "scripts": {
-        "test": "php tests/run.php"
+        "test": [
+            "@test:analyzer",
+            "@test:runtime"
+        ],
+        "test:analyzer": "php tests/run.php",
+        "test:runtime": "vendor/bin/phpunit tests/runtime"
     },
     "config": {
         "sort-packages": true,

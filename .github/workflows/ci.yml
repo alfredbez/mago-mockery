@@ -29,4 +29,7 @@ jobs:
         run: php tests/check-spec.php
 
       - name: Run analyzer suite
-        run: composer test
+        run: composer test:analyzer
+
+      - name: Run runtime contract tests
+        run: composer test:runtime

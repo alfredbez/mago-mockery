@@ -36,6 +36,8 @@ final class ApiClient
 
 trait LoggableTrait
 {
+    public const TAG = 'trait-tag';
+
     public function logTraitMessage(string $message): string
     {
         return $message;

@@ -178,7 +178,7 @@ final class MockTypeFactory
      */
     public static function fromFetchMock(Invocation $invocation, Codebase $codebase): ?Type
     {
-        $literal = $invocation->getArgument(0, 'name')?->type?->getLiteralString();
+        $literal = $invocation->getArgument(0, 'name', 'reference')?->type?->getLiteralString();
         if ($literal === null) {
             return null;
         }

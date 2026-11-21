@@ -115,6 +115,8 @@ final class MockSpecs extends Support
         $traitMock = Mockery::mock(LoggableTrait::class);
         $traitMock->logTraitMessage('from-trait');
         $traitMock->shouldReceive('logTraitMessage')->with('from-trait')->andReturn('ok');
+        $traitTag = $traitMock::TAG;
+        unset($traitTag);
 
         $fetched = Mockery::fetchMock(Greeter::class);
         if ($fetched !== null) {
@@ -122,7 +124,7 @@ final class MockSpecs extends Support
             $this->acceptGreeter($fetched);
         }
 
-        $containerFetched = Mockery::getContainer()->fetchMock(ApiClient::class);
+        $containerFetched = Mockery::getContainer()->fetchMock(reference: ApiClient::class);
         if ($containerFetched !== null) {
             $containerFetched->fetch(42);
             $this->acceptApiClient($containerFetched);

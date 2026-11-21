@@ -38,6 +38,8 @@ $expected = [
             'invalid-argument' => 1,
         ],
         'tests/fixtures/Negative.php' => [
+            // direct trait constant access on non-mock $traitClass = LoggableTrait::class
+            'direct-trait-constant-access' => 1,
             // unknown methods on mocks, string specs, object partial, trait mock, fetched mock, after getMock()/fluent builders/higher-order,
             // plus Expectation method `andReturn` called on VerificationDirector
             'non-existent-method' => 11,
@@ -68,7 +70,9 @@ $expected = [
             'too-few-arguments' => 2,
         ],
         'tests/fixtures/MockSpecs.php' => [
+            'impossible-assignment' => 1,
             'invalid-argument' => 12,
+            'non-existent-class-constant' => 1,
             'non-existent-method' => 31,
             'possibly-invalid-argument' => 2,
         ],
@@ -81,6 +85,7 @@ $expected = [
             'invalid-argument' => 1,
         ],
         'tests/fixtures/Negative.php' => [
+            'direct-trait-constant-access' => 1,
             'invalid-argument' => 8,
             'invalid-method-access' => 2,
             'mixed-method-access' => 1,

@@ -148,6 +148,9 @@ final class Negative extends Support
         if ($fetched !== null) {
             $fetched->missingOnFetchedMock();
         }
+        $traitClass = LoggableTrait::class;
+        $directTraitConst = $traitClass::TAG;
+        unset($directTraitConst);
     }
 
     /**

@@ -36,8 +36,24 @@ final class TraitMockConstantIssueFilter implements IssueFilterHook
         }
 
         $expr = ltrim(substr($context->contents, $primarySpan->start, $primarySpan->end - $primarySpan->start));
-        if ($expr !== '' && $expr[0] === '$') {
-            return IssueFilterDecision::Remove;
+        $after = substr($context->contents, $primarySpan->end, 16);
+        $var = null;
+        if (preg_match('/^(\$[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)(?:::|$)/', $expr, $match) === 1) {
+            if (str_contains($expr, '::') || str_starts_with(ltrim($after), '::')) {
+                $var = $match[1];
+            }
+        }
+
+        if ($var !== null) {
+            $prefix = substr($context->contents, 0, $primarySpan->start);
+            if (preg_match_all('/\bfunction\b[^{]*\{/', $prefix, $fnMatches, PREG_OFFSET_CAPTURE) >= 1) {
+                $lastFn = $fnMatches[0][array_key_last($fnMatches[0])];
+                $prefix = substr($prefix, $lastFn[1]);
+            }
+            $assignPattern = '/' . preg_quote($var, '/') . '\s*=\s*(?:\\\\?(?:Mockery|m)::(?:mock|spy|namedMock|instanceMock)|(?:mock|spy|namedMock)\s*\()/i';
+            if (preg_match($assignPattern, $prefix) === 1) {
+                return IssueFilterDecision::Remove;
+            }
         }
 
         return IssueFilterDecision::Keep;

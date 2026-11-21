@@ -17,7 +17,7 @@ use Mago\Sdk\Analyzer\Type\NamedObjectType;
 use Mago\Sdk\Reporting\Issue;
 use Mago\Sdk\Reporting\Level;
 
-use function array_map;
+use function array_key_last;
 use function array_unique;
 use function array_values;
 use function count;
@@ -25,7 +25,10 @@ use function explode;
 use function implode;
 use function in_array;
 use function is_string;
+use function preg_match_all;
+use function stripos;
 use function strtolower;
+use function substr;
 
 /**
  * Opt-in check (`MAGO_MOCKERY_STRICT_METHODS=1`) that validates literal method names
@@ -80,6 +83,7 @@ final class StrictMockedMethodHook implements MethodCallAnalysisHook
     public function getRequirements(): array
     {
         return [
+            FileAnalysisRequirement::SourceText,
             FileAnalysisRequirement::ReceiverType,
             FileAnalysisRequirement::ArgumentTypes,
         ];
@@ -139,6 +143,10 @@ final class StrictMockedMethodHook implements MethodCallAnalysisHook
             }
 
             if (in_array(true, $context->codebase->checkMultipleMethodsExist($checks), true)) {
+                continue;
+            }
+
+            if ($this->isAllowedViaMockingMethod($context->source->contents, $context->node->span->end, $methodName)) {
                 continue;
             }
 
@@ -233,6 +241,10 @@ final class StrictMockedMethodHook implements MethodCallAnalysisHook
 
         foreach ($candidates as $candidate) {
             $lower = strtolower($candidate);
+            if ($lower === 'stdclass') {
+                return [];
+            }
+
             if (isset(self::IGNORED_TARGET_CLASSES[$lower])) {
                 continue;
             }
@@ -241,5 +253,31 @@ final class StrictMockedMethodHook implements MethodCallAnalysisHook
         }
 
         return array_values($classes);
+    }
+
+    private function isAllowedViaMockingMethod(string $contents, int $beforeOffset, string $methodName): bool
+    {
+        if (stripos($contents, 'shouldAllowMockingMethod') === false) {
+            return false;
+        }
+
+        $prefix = substr($contents, 0, $beforeOffset);
+        if (preg_match_all('/\bfunction\b[^{]*\{/', $prefix, $fnMatches, \PREG_OFFSET_CAPTURE) >= 1) {
+            $lastFn = $fnMatches[0][array_key_last($fnMatches[0])];
+            $prefix = substr($prefix, $lastFn[1]);
+        }
+
+        if (preg_match_all('/->\s*shouldAllowMockingMethod\s*\(\s*([\'"])([^\'"]+)\1\s*\)/i', $prefix, $matches) < 1) {
+            return false;
+        }
+
+        $wanted = strtolower($methodName);
+        foreach ($matches[2] as $allowed) {
+            if (strtolower($allowed) === $wanted) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

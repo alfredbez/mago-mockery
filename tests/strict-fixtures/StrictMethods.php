@@ -25,10 +25,36 @@ final class MagicCaller
 /**
  * @method string virtualGreet(string $name)
  */
-final class PseudoMethodTarget
+class PseudoMethodTarget
 {
     public function realMethod(): void {}
 }
+
+final class InheritedPseudoTarget extends PseudoMethodTarget {}
+
+trait TraitWithMagic
+{
+    /** @param list<mixed> $arguments */
+    public function __call(string $name, array $arguments): mixed
+    {
+        return null;
+    }
+}
+
+final class TraitMagicTarget
+{
+    use TraitWithMagic;
+}
+
+class MixinProvider
+{
+    public function fromMixin(): void {}
+}
+
+/** @mixin MixinProvider */
+class MixinParent {}
+
+final class InheritedMixinTarget extends MixinParent {}
 
 final class StrictMethodsFixture
 {
@@ -49,8 +75,27 @@ final class StrictMethodsFixture
         $magic = Mockery::mock(MagicCaller::class);
         $magic->shouldReceive('dynamicMagicMethod')->andReturn(1);
 
+        $traitMagic = Mockery::mock(TraitMagicTarget::class);
+        $traitMagic->shouldReceive('traitMagicMethod')->andReturn(1);
+
         $pseudo = Mockery::mock(PseudoMethodTarget::class);
         $pseudo->shouldReceive('virtualGreet')->andReturn('ok');
+
+        $inheritedPseudo = Mockery::mock(InheritedPseudoTarget::class);
+        $inheritedPseudo->shouldReceive('virtualGreet')->andReturn('ok');
+
+        $inheritedMixin = Mockery::mock(InheritedMixinTarget::class);
+        $inheritedMixin->shouldReceive('fromMixin');
+
+        $stdClassIntersection = Mockery::mock('\\stdClass, ' . StrictGreeter::class);
+        $stdClassIntersection->shouldReceive('dynamicStub')->andReturn('ok');
+
+        $allowedChained = Mockery::mock(StrictGreeter::class);
+        $allowedChained->shouldAllowMockingMethod('allowedChained')->shouldReceive('allowedChained');
+
+        $allowedSeparate = Mockery::mock(StrictGreeter::class);
+        $allowedSeparate->shouldAllowMockingMethod('allowedSeparate');
+        $allowedSeparate->shouldReceive('allowedSeparate');
 
         $anonymous = Mockery::mock();
         $anonymous->shouldReceive('anythingAtAll')->andReturn(true);
@@ -68,5 +113,9 @@ final class StrictMethodsFixture
         $greeter->shouldHaveReceived('missingHaveReceived');
         $greeter->shouldNotHaveReceived('missingNotHaveReceived');
         $greeter->shouldReceive('missingDemeter->child');
+
+        $greeter->shouldAllowMockingMethod('onlyThisOne');
+        $greeter->shouldReceive('stillMissingAfterAllow');
+        $greeter->shouldReceive('allowedSeparate');
     }
 }

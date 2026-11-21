@@ -95,6 +95,8 @@ final class StrictMethodsFixture
 
         $allowedSeparate = Mockery::mock(StrictGreeter::class);
         $allowedSeparate->shouldAllowMockingMethod('allowedSeparate');
+        $nested = static function (): void {};
+        $nested();
         $allowedSeparate->shouldReceive('allowedSeparate');
 
         $anonymous = Mockery::mock();
@@ -104,6 +106,7 @@ final class StrictMethodsFixture
     public function invalidCalls(): void
     {
         $greeter = Mockery::mock(StrictGreeter::class);
+        $otherGreeter = Mockery::mock(StrictGreeter::class);
         $greeter->shouldReceive('doesNotExist');
         $greeter->shouldReceive('greet')->shouldReceive('missingChained');
         $greeter->shouldNotReceive('missingNotReceive');
@@ -117,5 +120,11 @@ final class StrictMethodsFixture
         $greeter->shouldAllowMockingMethod('onlyThisOne');
         $greeter->shouldReceive('stillMissingAfterAllow');
         $greeter->shouldReceive('allowedSeparate');
+
+        $otherGreeter->shouldAllowMockingMethod('onlyOnOtherMock');
+        $greeter->shouldReceive('onlyOnOtherMock');
+
+        // $greeter->shouldAllowMockingMethod('commentedOut');
+        $greeter->shouldReceive('commentedOut');
     }
 }

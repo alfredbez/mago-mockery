@@ -324,7 +324,7 @@ $failures += assertHistograms('strict default mode', $strictDefault, [
 ]);
 $failures += assertHistograms('strict enabled mode', $strictEnabled, [
     'tests/strict-fixtures/StrictMethods.php' => [
-        'alfredbez/mockery/unknown-mocked-method' => 11,
+        'alfredbez/mockery/unknown-mocked-method' => 13,
     ],
 ]);
 foreach ([
@@ -339,6 +339,8 @@ foreach ([
     'missingDemeter',
     'stillMissingAfterAllow',
     'allowedSeparate',
+    'onlyOnOtherMock',
+    'commentedOut',
 ] as $missingMethod) {
     $failures += assertMessageCount(
         'strict enabled mode',

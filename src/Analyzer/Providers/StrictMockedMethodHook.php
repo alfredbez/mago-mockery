@@ -16,8 +16,11 @@ use Mago\Sdk\Analyzer\Type\KeyedArrayType;
 use Mago\Sdk\Analyzer\Type\NamedObjectType;
 use Mago\Sdk\Reporting\Issue;
 use Mago\Sdk\Reporting\Level;
+use Mago\Sdk\Span;
+use Mago\Sdk\Syntax\Node;
+use Mago\Sdk\Syntax\NodeKind;
+use Mago\Sdk\Syntax\SourceFile;
 
-use function array_key_last;
 use function array_unique;
 use function array_values;
 use function count;
@@ -25,8 +28,8 @@ use function explode;
 use function implode;
 use function in_array;
 use function is_string;
-use function preg_match_all;
 use function stripos;
+use function strlen;
 use function strtolower;
 use function substr;
 
@@ -146,7 +149,7 @@ final class StrictMockedMethodHook implements MethodCallAnalysisHook
                 continue;
             }
 
-            if ($this->isAllowedViaMockingMethod($context->source->contents, $context->node->span->end, $methodName)) {
+            if ($this->isAllowedViaMockingMethod($context, $methodName)) {
                 continue;
             }
 
@@ -255,29 +258,235 @@ final class StrictMockedMethodHook implements MethodCallAnalysisHook
         return array_values($classes);
     }
 
-    private function isAllowedViaMockingMethod(string $contents, int $beforeOffset, string $methodName): bool
+    private function isAllowedViaMockingMethod(NodeAnalysisContext $context, string $methodName): bool
     {
-        if (stripos($contents, 'shouldAllowMockingMethod') === false) {
+        if (stripos($context->source->contents, 'shouldAllowMockingMethod') === false) {
             return false;
         }
 
-        $prefix = substr($contents, 0, $beforeOffset);
-        if (preg_match_all('/\bfunction\b[^{]*\{/', $prefix, $fnMatches, \PREG_OFFSET_CAPTURE) >= 1) {
-            $lastFn = $fnMatches[0][array_key_last($fnMatches[0])];
-            $prefix = substr($prefix, $lastFn[1]);
-        }
-
-        if (preg_match_all('/->\s*shouldAllowMockingMethod\s*\(\s*([\'"])([^\'"]+)\1\s*\)/i', $prefix, $matches) < 1) {
+        $source = $context->analysis->getSourceFile();
+        $call = $this->findMethodCallBySpan($source, $context->node->span);
+        if ($call === null) {
             return false;
         }
 
         $wanted = strtolower($methodName);
-        foreach ($matches[2] as $allowed) {
-            if (strtolower($allowed) === $wanted) {
+        if ($this->receiverChainAllowsMethod($source, $call, $wanted)) {
+            return true;
+        }
+
+        $receiverVar = $this->baseReceiverVariableName($source, $call);
+        if ($receiverVar === null) {
+            return false;
+        }
+
+        $scope = $this->enclosingScope($source, $call);
+        $callStart = $call->span->start;
+        $stack = [];
+        $scopeChildren = $source->getChildren($scope);
+        for ($i = count($scopeChildren) - 1; $i >= 0; --$i) {
+            $stack[] = $scopeChildren[$i];
+        }
+
+        while (($node = array_pop($stack)) !== null) {
+            if ($node->span->start >= $callStart || self::isScopeBoundary($node->kind)) {
+                continue;
+            }
+
+            if (
+                $node->kind === NodeKind::MethodCall
+                && $this->isShouldAllowMockingMethodCall($source, $node, $wanted)
+                && $this->baseReceiverVariableName($source, $node) === $receiverVar
+            ) {
                 return true;
+            }
+
+            $children = $source->getChildren($node);
+            for ($i = count($children) - 1; $i >= 0; --$i) {
+                $stack[] = $children[$i];
             }
         }
 
         return false;
+    }
+
+    private function findMethodCallBySpan(SourceFile $source, Span $targetSpan): ?Node
+    {
+        $current = $source->getNode(0);
+        if ($current->span->start <= $targetSpan->start && $current->span->end >= $targetSpan->end) {
+            while (true) {
+                if (
+                    $current->kind === NodeKind::MethodCall
+                    && $current->span->start === $targetSpan->start
+                    && $current->span->end === $targetSpan->end
+                ) {
+                    return $current;
+                }
+
+                $next = null;
+                foreach ($source->getChildren($current) as $child) {
+                    if ($child->span->start <= $targetSpan->start && $child->span->end >= $targetSpan->end) {
+                        $next = $child;
+                        break;
+                    }
+                }
+                if ($next === null) {
+                    break;
+                }
+                $current = $next;
+            }
+        }
+
+        foreach ($source->getNodes(NodeKind::MethodCall) as $methodCall) {
+            if ($methodCall->span->start === $targetSpan->start && $methodCall->span->end === $targetSpan->end) {
+                return $methodCall;
+            }
+        }
+
+        return null;
+    }
+
+    private function receiverChainAllowsMethod(SourceFile $source, Node $call, string $wantedLower): bool
+    {
+        $receiver = $this->unwrap($source, $source->getChildren($call)[0] ?? null);
+        while ($receiver !== null && $receiver->kind === NodeKind::MethodCall) {
+            if ($this->isShouldAllowMockingMethodCall($source, $receiver, $wantedLower)) {
+                return true;
+            }
+
+            $receiver = $this->unwrap($source, $source->getChildren($receiver)[0] ?? null);
+        }
+
+        return false;
+    }
+
+    private function baseReceiverVariableName(SourceFile $source, Node $call): ?string
+    {
+        $current = $this->unwrap($source, $source->getChildren($call)[0] ?? null);
+        while ($current !== null && $current->kind === NodeKind::MethodCall) {
+            $current = $this->unwrap($source, $source->getChildren($current)[0] ?? null);
+        }
+
+        if ($current === null || $current->kind !== NodeKind::DirectVariable) {
+            return null;
+        }
+
+        return $source->getText($current);
+    }
+
+    private function isShouldAllowMockingMethodCall(SourceFile $source, Node $call, string $wantedLower): bool
+    {
+        $children = $source->getChildren($call);
+        $member = $children[1] ?? null;
+        if ($member === null) {
+            return false;
+        }
+
+        $selector = $source->getChildren($member)[0] ?? null;
+        if ($selector === null || $selector->kind !== NodeKind::LocalIdentifier) {
+            return false;
+        }
+
+        if (strtolower($source->getText($selector)) !== 'shouldallowmockingmethod') {
+            return false;
+        }
+
+        $argList = $children[2] ?? null;
+        if ($argList === null || $argList->kind !== NodeKind::ArgumentList) {
+            return false;
+        }
+
+        foreach ($source->getChildren($argList) as $argument) {
+            $variant = $source->getChildren($argument)[0] ?? null;
+            if ($variant === null) {
+                continue;
+            }
+
+            $value = null;
+            if ($variant->kind === NodeKind::PositionalArgument) {
+                $value = $source->getChildren($variant)[0] ?? null;
+            } elseif ($variant->kind === NodeKind::NamedArgument) {
+                $parts = $source->getChildren($variant);
+                if (isset($parts[0], $parts[1]) && $source->getText($parts[0]) === 'method') {
+                    $value = $parts[1];
+                }
+            }
+
+            if ($value !== null) {
+                $literal = $this->extractLiteralString($source, $value);
+                if ($literal !== null && strtolower($literal) === $wantedLower) {
+                    return true;
+                }
+            }
+
+            break;
+        }
+
+        return false;
+    }
+
+    private function extractLiteralString(SourceFile $source, Node $node): ?string
+    {
+        $node = $this->unwrap($source, $node);
+        if ($node === null) {
+            return null;
+        }
+
+        $literal = $source->getLiteralString($node);
+        if ($literal !== null) {
+            return $literal;
+        }
+
+        $text = $source->getText($node);
+        if (strlen($text) >= 2 && (($text[0] === "'" && $text[-1] === "'") || ($text[0] === '"' && $text[-1] === '"'))) {
+            return substr($text, 1, -1);
+        }
+
+        return null;
+    }
+
+    private function enclosingScope(SourceFile $source, Node $node): Node
+    {
+        $current = $source->getParent($node);
+        while ($current !== null) {
+            if (self::isScopeBoundary($current->kind)) {
+                return $current;
+            }
+
+            $parent = $source->getParent($current);
+            if ($parent === null) {
+                return $current;
+            }
+
+            $current = $parent;
+        }
+
+        return $node;
+    }
+
+    private static function isScopeBoundary(NodeKind $kind): bool
+    {
+        return $kind === NodeKind::Method
+            || $kind === NodeKind::Function
+            || $kind === NodeKind::Closure
+            || $kind === NodeKind::ArrowFunction;
+    }
+
+    private function unwrap(SourceFile $source, ?Node $node): ?Node
+    {
+        while (
+            $node !== null
+            && (
+                $node->kind === NodeKind::Expression
+                || $node->kind === NodeKind::Call
+                || $node->kind === NodeKind::Parenthesized
+                || $node->kind === NodeKind::Variable
+                || $node->kind === NodeKind::Literal
+            )
+        ) {
+            $node = $source->getChildren($node)[0] ?? null;
+        }
+
+        return $node;
     }
 }

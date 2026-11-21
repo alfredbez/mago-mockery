@@ -28,6 +28,7 @@ final class MockeryPlugin implements Plugin
 
     public function register(PluginRegistry $registry): void
     {
+        $registry->enableProviderMemoization();
         $registry->registerMethodReturnTypeProvider(new MockFactoryReturnTypeProvider());
         $registry->registerFunctionReturnTypeProvider(new MockHelperFunctionReturnTypeProvider());
         $registry->registerMethodReturnTypeProvider(new NoArgumentFactoryProvider());

@@ -4,3 +4,5 @@
 /bench/*.json
 /bench/__pycache__/
 /.pytest_cache/
+.corpus-cache/
+corpus-report.json

@@ -21,6 +21,7 @@ use Mago\Sdk\Analyzer\Type\NamedObjectType;
 use Mago\Sdk\Analyzer\Type\ScalarType;
 use Mago\Sdk\Analyzer\Type\ScalarTypeKind;
 use Mago\Sdk\Analyzer\Type\Visibility;
+use WeakMap;
 
 /**
  * shouldReceive('name') returns a CompositeExpectation, not an Expectation.
@@ -41,6 +42,9 @@ final class CompositeExpectationProvider implements MethodReturnTypeProvider, Ca
 {
     public const COMPOSITE = 'Mockery\\CompositeExpectation';
     public const EXPECTATION = 'Mockery\\Expectation';
+
+    /** @var null|WeakMap<FunctionLikeMetadata, array<string, list<CallableParameter>>> */
+    private ?WeakMap $parameters = null;
 
     /** Methods that build an expectation through Mockery::parseShouldReturnArgs(). */
     private const FACTORIES = ['shouldReceive', 'shouldNotReceive', 'expects', 'allows'];
@@ -78,7 +82,8 @@ final class CompositeExpectationProvider implements MethodReturnTypeProvider, Ca
         }
 
         $methodName = $context->invocation->name;
-        if (isset(self::DECLARED_ON_COMPOSITE[strtolower($methodName)])) {
+        $lower = strtolower($methodName);
+        if (isset(self::DECLARED_ON_COMPOSITE[$lower])) {
             // Keep CompositeExpectation's declared signatures (`add(Expectation)`, `getMock()`, etc.).
             return null;
         }
@@ -89,28 +94,44 @@ final class CompositeExpectationProvider implements MethodReturnTypeProvider, Ca
             return null;
         }
 
-        $parameters = [];
-        foreach ($expectationMethod->parameters as $parameter) {
-            $name = str_starts_with($parameter->name, '$') ? $parameter->name : '$' . $parameter->name;
-            $variadic = $parameter->flags->contains(MetadataFlags::VARIADIC);
-            $hasDefault = !$variadic && $parameter->flags->contains(MetadataFlags::HAS_DEFAULT);
-            $byReference = $parameter->flags->contains(MetadataFlags::BY_REFERENCE);
-            $type = $parameter->type?->type ?? $parameter->declaredType?->type;
+        if ($expectationMethod->parameters === []) {
+            return new EffectiveCallableSignature(
+                parameters: [],
+                allowsNamedArguments: true,
+                displayName: self::COMPOSITE . '::' . $methodName,
+            );
+        }
 
-            // Mockery's Expectation::andSet() docblock mistakenly types variadic values as `array<mixed> ...$values`.
-            if (strtolower($methodName) === 'andset' && $variadic) {
-                $type = Type::mixed();
+        $this->parameters ??= new WeakMap();
+        $parameters = $this->parameters[$expectationMethod][$lower] ?? null;
+        if ($parameters === null) {
+            $parameters = [];
+            foreach ($expectationMethod->parameters as $parameter) {
+                $name = str_starts_with($parameter->name, '$') ? $parameter->name : '$' . $parameter->name;
+                $variadic = $parameter->flags->contains(MetadataFlags::VARIADIC);
+                $hasDefault = !$variadic && $parameter->flags->contains(MetadataFlags::HAS_DEFAULT);
+                $byReference = $parameter->flags->contains(MetadataFlags::BY_REFERENCE);
+                $type = $parameter->type?->type ?? $parameter->declaredType?->type;
+
+                // Mockery's Expectation::andSet() docblock mistakenly types variadic values as `array<mixed> ...$values`.
+                if ($lower === 'andset' && $variadic) {
+                    $type = Type::mixed();
+                }
+
+                $parameters[] = new CallableParameter(
+                    name: $name,
+                    type: $type,
+                    closureThisType: $parameter->closureThisType?->type,
+                    byReference: $byReference,
+                    variadic: $variadic,
+                    hasDefault: $hasDefault,
+                    outType: $parameter->outType?->type,
+                );
             }
 
-            $parameters[] = new CallableParameter(
-                name: $name,
-                type: $type,
-                closureThisType: $parameter->closureThisType?->type,
-                byReference: $byReference,
-                variadic: $variadic,
-                hasDefault: $hasDefault,
-                outType: $parameter->outType?->type,
-            );
+            $cached = $this->parameters[$expectationMethod] ?? [];
+            $cached[$lower] = $parameters;
+            $this->parameters[$expectationMethod] = $cached;
         }
 
         return new EffectiveCallableSignature(

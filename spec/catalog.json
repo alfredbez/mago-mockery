@@ -1,0 +1,208 @@
+{
+  "schema_version": 1,
+  "sources": {
+    "phpstan-mockery-test": {
+      "url": "https://github.com/phpstan/phpstan-mockery/blob/4538f63731159086ea628606757f5a0951e1ad57/tests/Mockery/MockeryTest.php",
+      "kind": "analyzer-test",
+      "scope": "mock(), namedMock(), multi-interface comma syntax, constructor args, Foo[method], makePartial(), shouldAllowMockingProtectedMethods(), allows()/expects() higher-order chains"
+    },
+    "phpstan-isolated-test": {
+      "url": "https://github.com/phpstan/phpstan-mockery/blob/4538f63731159086ea628606757f5a0951e1ad57/tests/Mockery/IsolatedMockeryTest.php",
+      "kind": "analyzer-test",
+      "scope": "alias: and overload: string mock prefixes"
+    },
+    "phpstan-bar-test": {
+      "url": "https://github.com/phpstan/phpstan-mockery/blob/4538f63731159086ea628606757f5a0951e1ad57/tests/Mockery/MockeryBarTest.php",
+      "kind": "analyzer-test",
+      "scope": "spy(), shouldReceive(), shouldNotReceive(), shouldHaveReceived(), shouldNotHaveReceived(null), closure argument matchers"
+    },
+    "phpstan-different-ns-test": {
+      "url": "https://github.com/phpstan/phpstan-mockery/blob/4538f63731159086ea628606757f5a0951e1ad57/tests/Mockery/DifferentNamespaceTest.php",
+      "kind": "analyzer-test",
+      "scope": "expects('method')->with()->andReturn() across namespaces"
+    },
+    "psalm-mock-return": {
+      "url": "https://github.com/psalm/mockery-psalm-plugin/blob/2d482b39de60fdf5b504066eb63b69de74021dc4/tests/acceptance/MockReturn.feature",
+      "kind": "analyzer-test",
+      "scope": "Foo[method] partial spec, alias:, overload:, spy(), chained shouldReceive(), allows()/expects() higher-order style"
+    },
+    "mockery-container": {
+      "url": "https://github.com/mockery/mockery/blob/967a801bd188989a5669bd280f252d51c0fdc9ee/library/Mockery/Container.php",
+      "kind": "runtime-source",
+      "scope": "Mockery 1.6.15 Container::parseArguments() and parseStringArgument() target parsing"
+    },
+    "mockery-mock": {
+      "url": "https://github.com/mockery/mockery/blob/967a801bd188989a5669bd280f252d51c0fdc9ee/library/Mockery/Mock.php",
+      "kind": "runtime-source",
+      "scope": "Mockery 1.6.15 allows(), expects(), shouldReceive(), shouldNotReceive(), shouldHaveReceived(), shouldNotHaveReceived(), shouldNotHaveBeenCalled(), fluent builders"
+    },
+    "mockery-composite": {
+      "url": "https://github.com/mockery/mockery/blob/967a801bd188989a5669bd280f252d51c0fdc9ee/library/Mockery/CompositeExpectation.php",
+      "kind": "runtime-source",
+      "scope": "Mockery 1.6.15 CompositeExpectation __call forwarding, add(), getMock(), mock(), shouldReceive()"
+    },
+    "mockery-higher-order": {
+      "url": "https://github.com/mockery/mockery/blob/967a801bd188989a5669bd280f252d51c0fdc9ee/library/Mockery/HigherOrderMessage.php",
+      "kind": "runtime-source",
+      "scope": "Mockery 1.6.15 HigherOrderMessage::__call() forwarding for expectations and verification"
+    }
+  },
+  "cases": [
+    {
+      "id": "MOCKERY-M001",
+      "title": "Mock factory methods and helpers return T&MockInterface",
+      "sources": ["phpstan-mockery-test", "phpstan-bar-test", "psalm-mock-return", "mockery-container"],
+      "fixture": "<?php interface Greeter { public function greet(string $name): string; } $m = Mockery::mock(Greeter::class); $m->greet('world'); $s = Mockery::spy(Greeter::class); $s->greet('world'); $n = Mockery::namedMock('Alias', Greeter::class); $n->greet('world');",
+      "semantics": "Mockery::mock(), spy(), namedMock(), instanceMock(), Container::mock(), and the global mock()/spy()/namedMock() helpers return an object satisfying both the mocked class/interface and Mockery\\MockInterface.",
+      "analyzer_expectation": "Infer T&MockInterface for existing classes/interfaces. Report unknown methods on T and reject passing T&MockInterface where an unrelated class is expected.",
+      "negative_control": "Calling missingMethod() on a Greeter mock or passing a Greeter mock to a parameter expecting ApiClient reports errors; disabling extensions restores missing-method errors on Greeter::greet().",
+      "priority": "P0",
+      "versions": "Verified on PHP 8.4, Mockery 1.6.15, Mago 1.60.2.",
+      "coverage": ["tests/fixtures/Positive.php", "tests/fixtures/MockSpecs.php", "tests/fixtures/Negative.php", "tests/run.php"],
+      "status": "covered"
+    },
+    {
+      "id": "MOCKERY-M002",
+      "title": "Multi-interface specs, comma lists, constructor args, quick definitions, and setup closures",
+      "sources": ["phpstan-mockery-test", "mockery-container"],
+      "fixture": "<?php interface A { public function a(): void; } interface B { public function b(): void; } $m = Mockery::mock(A::class, B::class . ', ' . A::class, [true]); $m->a(); $m->b();",
+      "semantics": "Container::parseArguments() accepts multiple class-string arguments, comma-separated class/interface strings, constructor argument lists, associative quick-definition maps, and a trailing setup Closure.",
+      "analyzer_expectation": "Intersect all resolved existing classes/interfaces with MockInterface while ignoring array and closure arguments and deduplicating repeated targets.",
+      "negative_control": "Disabling extensions loses all target interfaces and produces non-existent-method and invalid-argument diagnostics on MockSpecs.php.",
+      "priority": "P0",
+      "versions": "Verified on PHP 8.4, Mockery 1.6.15, Mago 1.60.2.",
+      "coverage": ["tests/fixtures/MockSpecs.php", "tests/fixtures/Positive.php", "tests/run.php"],
+      "status": "covered"
+    },
+    {
+      "id": "MOCKERY-M003",
+      "title": "alias: and overload: string mock prefixes resolve target class",
+      "sources": ["phpstan-isolated-test", "psalm-mock-return", "mockery-container"],
+      "fixture": "<?php final class Api { public function fetch(int $id): string { return ''; } } $a = Mockery::mock('alias:' . Api::class); $o = Mockery::mock('overload:' . Api::class); $a->fetch(1); $o->fetch(2);",
+      "semantics": "Container::parseStringArgument() strips alias: and overload: prefixes to identify the target class name.",
+      "analyzer_expectation": "Infer Target&MockInterface when Target exists in the codebase; fall back to MockInterface when Target does not exist.",
+      "negative_control": "Passing Mockery::mock('overload:' . Greeter::class) into acceptApiClient() reports invalid-argument with Greeter&MockInterface; unknown class overload falls back to MockInterface.",
+      "priority": "P0",
+      "versions": "Verified on PHP 8.4, Mockery 1.6.15, Mago 1.60.2.",
+      "coverage": ["tests/fixtures/MockSpecs.php", "tests/fixtures/Negative.php", "tests/run.php"],
+      "status": "covered"
+    },
+    {
+      "id": "MOCKERY-M004",
+      "title": "Partial mock method list syntax Foo[m1, m2] and Foo[!m1]",
+      "sources": ["phpstan-mockery-test", "psalm-mock-return", "mockery-container"],
+      "fixture": "<?php final class Api { public function fetch(int $id): string { return ''; } } $p = Mockery::mock(Api::class . '[fetch]', []); $p->fetch(1);",
+      "semantics": "Container::parseStringArgument() strips trailing [methodList] (including negated !method entries) to identify the mocked target class without splitting method commas as interfaces.",
+      "analyzer_expectation": "Infer Target&MockInterface for Foo[m1, m2] and Foo[!m1] specs when Target exists.",
+      "negative_control": "Calling an unknown method on Mockery::mock(ApiClient::class . '[fetch]') reports non-existent-method on ApiClient.",
+      "priority": "P0",
+      "versions": "Verified on PHP 8.4, Mockery 1.6.15, Mago 1.60.2.",
+      "coverage": ["tests/fixtures/MockSpecs.php", "tests/fixtures/Negative.php", "tests/run.php"],
+      "status": "covered"
+    },
+    {
+      "id": "MOCKERY-M005",
+      "title": "Concrete object partial mocks preserve the wrapped object type",
+      "sources": ["mockery-container"],
+      "fixture": "<?php final class Api { public function fetch(int $id): string { return ''; } } $p = Mockery::mock(new Api()); $p->fetch(1);",
+      "semantics": "Container::parseArguments() accepts a non-Closure, non-MockConfigurationBuilder object instance and builds a partial mock wrapping it.",
+      "analyzer_expectation": "Infer ClassName&MockInterface for concrete object arguments while ignoring Closure and MockConfigurationBuilder.",
+      "negative_control": "Calling an unknown method on Mockery::mock(new GreeterImpl()) reports non-existent-method on GreeterImpl.",
+      "priority": "P1",
+      "versions": "Verified on PHP 8.4, Mockery 1.6.15, Mago 1.60.2.",
+      "coverage": ["tests/fixtures/MockSpecs.php", "tests/fixtures/Negative.php", "tests/run.php"],
+      "status": "covered"
+    },
+    {
+      "id": "MOCKERY-E001",
+      "title": "Expectation builders return CompositeExpectation<Mock> with forwarded signatures",
+      "sources": ["phpstan-mockery-test", "phpstan-different-ns-test", "phpstan-bar-test", "psalm-mock-return", "mockery-composite"],
+      "fixture": "<?php interface Greeter { public function greet(string $n): string; } $g = Mockery::mock(Greeter::class); $m = $g->shouldReceive('greet')->with('x')->andReturn('hi')->shouldReceive('greet')->andReturnSelf()->getMock(); $m->greet('world');",
+      "semantics": "shouldReceive(), shouldNotReceive(), allows(string), and expects(string) return a CompositeExpectation wrapping the mock. Forwarded Expectation methods preserve parameter types and return the composite; getMock()/mock() restore the mock type; add() returns void.",
+      "analyzer_expectation": "Resolve forwarded public Expectation methods with real signatures (including dynamic string args to allows()/expects()), preserve MockType through getMock()/mock(), and keep unknown/invalid-arg/void-chain diagnostics.",
+      "negative_control": "Unknown method on CompositeExpectation, times('not-an-int'), chaining after add(), and unknown method after getMock() all produce diagnostics.",
+      "priority": "P0",
+      "versions": "Verified on PHP 8.4, Mockery 1.6.15, Mago 1.60.2.",
+      "coverage": ["tests/fixtures/ExpectationChains.php", "tests/fixtures/Positive.php", "tests/fixtures/Negative.php", "tests/run.php"],
+      "status": "covered"
+    },
+    {
+      "id": "MOCKERY-E002",
+      "title": "Fluent mock-builder methods preserve T&MockInterface",
+      "sources": ["phpstan-mockery-test", "mockery-mock"],
+      "fixture": "<?php interface Greeter { public function greet(string $n): string; } $g = Mockery::mock(Greeter::class)->makePartial()->shouldIgnoreMissing()->shouldAllowMockingProtectedMethods()->byDefault()->allows(['greet' => 'hi']); $g->greet('world');",
+      "semantics": "makePartial(), shouldIgnoreMissing(), shouldAllowMockingProtectedMethods(), byDefault(), and allows(non-empty-array) return $this at runtime.",
+      "analyzer_expectation": "Preserve the full receiver intersection T&MockInterface across all fluent mock-builder calls including allows(array) whose interface docblock returns self.",
+      "negative_control": "Calling unknown methods after makePartial() or allows(['greet' => 'hi']) reports non-existent-method on Greeter.",
+      "priority": "P0",
+      "versions": "Verified on PHP 8.4, Mockery 1.6.15, Mago 1.60.2.",
+      "coverage": ["tests/fixtures/ExpectationChains.php", "tests/fixtures/Negative.php", "tests/run.php"],
+      "status": "covered"
+    },
+    {
+      "id": "MOCKERY-E003",
+      "title": "Higher-order expectation chains forward to CompositeExpectation<Mock>",
+      "sources": ["phpstan-mockery-test", "phpstan-bar-test", "psalm-mock-return", "mockery-higher-order"],
+      "fixture": "<?php interface Greeter { public function greet(string $n): string; } $g = Mockery::mock(Greeter::class); $m = $g->shouldReceive()->greet('x')->andReturn('hi')->shouldReceive('greet')->getMock(); $g->allows()->greet('x')->andReturns('hi'); $g->allows([])->greet('x'); $g->expects()->greet('x')->once(); $g->expects(null)->greet('x');",
+      "semantics": "Zero-argument shouldReceive()/shouldNotReceive()/allows()/expects(), allows([]), and expects(null) return HigherOrderMessage or ExpectsHigherOrderMessage, whose __call forwards to a CompositeExpectation on the mock.",
+      "analyzer_expectation": "Accept dynamic method calls on HigherOrderMessage/ExpectsHigherOrderMessage and return CompositeExpectation<Mock> so chained shouldReceive() and getMock() retain the mocked type.",
+      "negative_control": "Calling an unknown method after higher-order getMock() reports non-existent-method on Greeter.",
+      "priority": "P0",
+      "versions": "Verified on PHP 8.4, Mockery 1.6.15, Mago 1.60.2.",
+      "coverage": ["tests/fixtures/ExpectationChains.php", "tests/fixtures/Negative.php", "tests/run.php"],
+      "status": "covered"
+    },
+    {
+      "id": "MOCKERY-V001",
+      "title": "Positive verification calls return VerificationDirector directly and via HigherOrderMessage",
+      "sources": ["phpstan-bar-test", "mockery-mock", "mockery-higher-order"],
+      "fixture": "<?php interface Greeter { public function greet(string $n): string; } $g = Mockery::spy(Greeter::class); $g->shouldHaveReceived('greet')->with('x')->once(); $g->shouldHaveReceived()->greet('x')->once(); $g->shouldHaveReceived(null)->greet('x')->once(); $g->shouldHaveBeenCalled()->once();",
+      "semantics": "shouldHaveReceived($method) and shouldHaveBeenCalled() return VerificationDirector; shouldHaveReceived() and shouldHaveReceived(null) return HigherOrderMessage whose forwarded call returns VerificationDirector.",
+      "analyzer_expectation": "Allow optional/null $method without null-argument or too-few-arguments errors, return VerificationDirector for direct and higher-order calls, and reject Expectation-only methods like andReturn() on VerificationDirector.",
+      "negative_control": "Calling ->andReturn('hi') after shouldHaveReceived()->greet('x') reports non-existent-method on Mockery\\VerificationDirector.",
+      "priority": "P0",
+      "versions": "Verified on PHP 8.4, Mockery 1.6.15, Mago 1.60.2.",
+      "coverage": ["tests/fixtures/ExpectationChains.php", "tests/fixtures/Negative.php", "tests/run.php"],
+      "status": "covered"
+    },
+    {
+      "id": "MOCKERY-V002",
+      "title": "Negative verification calls return void/null and reject method chaining",
+      "sources": ["phpstan-bar-test", "mockery-mock", "mockery-higher-order"],
+      "fixture": "<?php interface Greeter { public function greet(string $n): string; } $g = Mockery::spy(Greeter::class); $g->shouldNotHaveReceived('greet', ['x']); $g->shouldNotHaveReceived()->greet('x'); $g->shouldNotHaveReceived(null)->greet('x'); $g->shouldNotHaveBeenCalled();",
+      "semantics": "In Mockery 1.6, shouldNotHaveReceived($method), shouldNotHaveBeenCalled(), and HigherOrderMessage forwarding for shouldNotHaveReceived return null (void), never VerificationDirector.",
+      "analyzer_expectation": "Return void for direct shouldNotHaveReceived($method), shouldNotHaveBeenCalled(), and forwarded shouldNotHaveReceived()->method() so chaining ->withAnyArgs() or ->once() fails statically.",
+      "negative_control": "Chaining ->withAnyArgs() on shouldNotHaveReceived('countGreetings'), ->once() on shouldNotHaveBeenCalled(), and ->once() on shouldNotHaveReceived()->greet('x') all report invalid-method-access on void.",
+      "priority": "P0",
+      "versions": "Runtime-verified on Mockery 1.6.15 and Mago 1.60.2.",
+      "coverage": ["tests/fixtures/ExpectationChains.php", "tests/fixtures/Negative.php", "tests/run.php"],
+      "status": "covered"
+    },
+    {
+      "id": "MOCKERY-G001",
+      "title": "Intersection-to-intersection parameter compatibility for mocks",
+      "sources": ["phpstan-mockery-test"],
+      "fixture": "<?php interface Greeter {} final class ApiClient {} function take(Greeter&Mockery\\MockInterface $g): void {} take(Mockery::mock(ApiClient::class));",
+      "semantics": "An ApiClient&MockInterface mock does not satisfy a Greeter&MockInterface parameter.",
+      "analyzer_expectation": "Report invalid-argument when passing ApiClient&MockInterface to Greeter&MockInterface. Currently a known upstream Mago 1.60.2 limitation tracked in Negative.php and tests/run.php.",
+      "negative_control": "IntersectionControl.php confirms plain PHP intersection checking is unaffected; Negative.php pins the known gap count (0) so an upstream Mago fix surfaces immediately.",
+      "priority": "P1",
+      "versions": "Tracked as known gap on Mago 1.60.2.",
+      "coverage": ["tests/fixtures/Negative.php", "tests/fixtures/IntersectionControl.php", "tests/run.php"],
+      "status": "candidate"
+    },
+    {
+      "id": "MOCKERY-G002",
+      "title": "Validate mocked method names against the target class",
+      "sources": ["mockery-mock"],
+      "fixture": "<?php interface Greeter { public function greet(string $n): string; } Mockery::mock(Greeter::class)->shouldReceive('doesNotExist');",
+      "semantics": "When Mockery's allowMockingNonExistentMethods is disabled, mocking a non-existent method fails at runtime.",
+      "analyzer_expectation": "Optional future rule or diagnostic checking literal method names passed to shouldReceive()/allows()/expects() or HigherOrderMessage against the mocked class's methods.",
+      "negative_control": "Mockery allows mocking non-existent methods by default and via shouldAllowMockingMethod(), so any future check must be opt-in or respect configuration.",
+      "priority": "P2",
+      "versions": "Not implemented; documented as known boundary.",
+      "coverage": [],
+      "status": "candidate"
+    }
+  ]
+}

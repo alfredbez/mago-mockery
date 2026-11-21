@@ -12,26 +12,29 @@ use Mago\Sdk\Analyzer\MethodTarget;
 use Mago\Sdk\Analyzer\ReturnTypeProviderContext;
 use Mago\Sdk\Analyzer\Type;
 use Mago\Sdk\Analyzer\Type\CallableParameter;
+use Mago\Sdk\Analyzer\Type\NamedObjectType;
 
 /**
- * HigherOrderMessage forwards every call to the expectation of the named method.
+ * HigherOrderMessage forwards every call to the underlying mock method.
  *
- * `$mock->shouldReceive()->greet('x')->andReturn('hi')` never calls a declared
- * method on HigherOrderMessage, so Mago reports non-existent-method or
- * non-documented-method. Declaring the call shape and its return type teaches
- * the analyzer the forward.
- *
- * Only the no-argument form of shouldReceive()/expects() reaches this class at
- * runtime; the provider for that split is NoArgumentFactoryProvider.
+ * When produced by NoArgumentFactoryProvider, the receiver carries the forwarded
+ * return type as a type parameter (`CompositeExpectation<Mock>`, `VerificationDirector`,
+ * or `void`). Unparameterized instances fall back to `Mockery\Expectation`.
  */
 final class HigherOrderMessageProvider implements MethodReturnTypeProvider, CallableSignatureProvider
 {
     public const EXPECTATION = 'Mockery\\Expectation';
 
+    private const HIGHER_ORDER_CLASSES = [
+        'mockery\\higherordermessage' => true,
+        'mockery\\expectshigherordermessage' => true,
+    ];
+
     public function getTargets(): array
     {
         return [
             MethodTarget::allMethods('Mockery\\HigherOrderMessage'),
+            MethodTarget::allMethods('Mockery\\ExpectsHigherOrderMessage'),
         ];
     }
 
@@ -42,12 +45,28 @@ final class HigherOrderMessageProvider implements MethodReturnTypeProvider, Call
                 new CallableParameter(name: '$arguments', type: Type::mixed(), variadic: true),
             ],
             allowsNamedArguments: true,
-            displayName: 'Mockery\\HigherOrderMessage::' . $context->invocation->name,
+            displayName: ($context->invocation->declaringClass ?? 'Mockery\\HigherOrderMessage')
+                . '::'
+                . $context->invocation->name,
         );
     }
 
     public function getReturnType(ReturnTypeProviderContext $context): Type
     {
+        $receiver = $context->invocation->receiverType;
+        if ($receiver !== null) {
+            foreach ($receiver->atomicTypes as $atomic) {
+                if (
+                    $atomic instanceof NamedObjectType
+                    && isset(self::HIGHER_ORDER_CLASSES[strtolower($atomic->name)])
+                    && $atomic->parameters !== null
+                    && isset($atomic->parameters[0])
+                ) {
+                    return $atomic->parameters[0];
+                }
+            }
+        }
+
         return Type::namedObject(self::EXPECTATION);
     }
 }

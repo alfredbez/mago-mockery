@@ -15,7 +15,11 @@ use Mago\Sdk\Analyzer\MethodTarget;
 use Mago\Sdk\Analyzer\ReturnTypeProviderContext;
 use Mago\Sdk\Analyzer\Type;
 use Mago\Sdk\Analyzer\Type\CallableParameter;
+use Mago\Sdk\Analyzer\Type\KeyedArrayType;
+use Mago\Sdk\Analyzer\Type\ListType;
 use Mago\Sdk\Analyzer\Type\NamedObjectType;
+use Mago\Sdk\Analyzer\Type\ScalarType;
+use Mago\Sdk\Analyzer\Type\ScalarTypeKind;
 use Mago\Sdk\Analyzer\Type\Visibility;
 
 /**
@@ -123,7 +127,7 @@ final class CompositeExpectationProvider implements MethodReturnTypeProvider, Ca
         if ($context->invocation->declaringClass === self::COMPOSITE) {
             $lower = strtolower($methodName);
             if ($lower === 'getmock' || $lower === 'mock') {
-                return $this->extractMockType($context->invocation->receiverType);
+                return self::extractMockType($context->invocation->receiverType);
             }
 
             if ($lower === 'shouldreceive' || $lower === 'shouldnotreceive') {
@@ -132,12 +136,12 @@ final class CompositeExpectationProvider implements MethodReturnTypeProvider, Ca
                     return null;
                 }
 
-                return $this->compositeTypeWithMock($this->extractMockType($context->invocation->receiverType));
+                return self::typeWithMock(self::extractMockType($context->invocation->receiverType));
             }
 
             if (isset(self::DECLARED_ON_COMPOSITE[$lower])) {
                 if ($lower === 'andreturn' || $lower === 'andreturns') {
-                    return $this->compositeTypeWithMock($this->extractMockType($context->invocation->receiverType));
+                    return self::typeWithMock(self::extractMockType($context->invocation->receiverType));
                 }
 
                 // `add()` -> void, `getOrderNumber()` -> int, `__toString()` -> string.
@@ -148,7 +152,7 @@ final class CompositeExpectationProvider implements MethodReturnTypeProvider, Ca
                 return null;
             }
 
-            return $this->compositeTypeWithMock($this->extractMockType($context->invocation->receiverType));
+            return self::typeWithMock(self::extractMockType($context->invocation->receiverType));
         }
 
         $first = $context->invocation->arguments[0] ?? null;
@@ -158,14 +162,63 @@ final class CompositeExpectationProvider implements MethodReturnTypeProvider, Ca
             return null;
         }
 
-        return match (strtolower($methodName)) {
-            // allows(array) and expects(null) return the mock itself, so the
-            // declared union is the better answer for them.
-            'allows', 'expects' => $first->type?->getLiteralString() === null
-                ? null
-                : $this->compositeTypeWithMock($context->invocation->receiverType),
-            default => $this->compositeTypeWithMock($context->invocation->receiverType),
-        };
+        $lower = strtolower($methodName);
+        if ($lower === 'allows') {
+            if ($first->type !== null && self::isStringType($first->type)) {
+                return self::typeWithMock($context->invocation->receiverType);
+            }
+
+            if ($first->type !== null && self::isNonEmptyArrayType($first->type)) {
+                return $context->invocation->receiverType;
+            }
+
+            return null;
+        }
+
+        if ($lower === 'expects') {
+            return $first->type !== null && self::isStringType($first->type)
+                ? self::typeWithMock($context->invocation->receiverType)
+                : null;
+        }
+
+        return self::typeWithMock($context->invocation->receiverType);
+    }
+
+    public static function typeWithMock(?Type $mockType): Type
+    {
+        if ($mockType === null) {
+            return Type::namedObject(self::COMPOSITE);
+        }
+
+        return Type::fromAtomic(new NamedObjectType(
+            name: self::COMPOSITE,
+            parameters: [$mockType],
+            variances: null,
+            static: false,
+            isThis: false,
+            intersections: null,
+            remappedParameters: false,
+        ));
+    }
+
+    public static function extractMockType(?Type $compositeType): ?Type
+    {
+        if ($compositeType === null) {
+            return null;
+        }
+
+        foreach ($compositeType->atomicTypes as $atomic) {
+            if (
+                $atomic instanceof NamedObjectType
+                && strtolower($atomic->name) === strtolower(self::COMPOSITE)
+                && $atomic->parameters !== null
+                && isset($atomic->parameters[0])
+            ) {
+                return $atomic->parameters[0];
+            }
+        }
+
+        return null;
     }
 
     private function resolveForwardedMethod(Codebase $codebase, string $methodName): ?FunctionLikeMetadata
@@ -186,40 +239,42 @@ final class CompositeExpectationProvider implements MethodReturnTypeProvider, Ca
         return $method;
     }
 
-    private function compositeTypeWithMock(?Type $mockType): Type
+    private static function isStringType(Type $type): bool
     {
-        if ($mockType === null) {
-            return Type::namedObject(self::COMPOSITE);
-        }
-
-        return Type::fromAtomic(new NamedObjectType(
-            name: self::COMPOSITE,
-            parameters: [$mockType],
-            variances: null,
-            static: false,
-            isThis: false,
-            intersections: null,
-            remappedParameters: false,
-        ));
-    }
-
-    private function extractMockType(?Type $compositeType): ?Type
-    {
-        if ($compositeType === null) {
-            return null;
-        }
-
-        foreach ($compositeType->atomicTypes as $atomic) {
+        foreach ($type->atomicTypes as $atomic) {
             if (
-                $atomic instanceof NamedObjectType
-                && strtolower($atomic->name) === strtolower(self::COMPOSITE)
-                && $atomic->parameters !== null
-                && isset($atomic->parameters[0])
+                !$atomic instanceof ScalarType
+                || ($atomic->kind !== ScalarTypeKind::String && $atomic->kind !== ScalarTypeKind::ClassLikeString)
             ) {
-                return $atomic->parameters[0];
+                return false;
             }
         }
 
-        return null;
+        return true;
+    }
+
+    private static function isNonEmptyArrayType(Type $type): bool
+    {
+        foreach ($type->atomicTypes as $atomic) {
+            if ($atomic instanceof KeyedArrayType) {
+                if (!$atomic->nonEmpty) {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if ($atomic instanceof ListType) {
+                if (!$atomic->nonEmpty && ($atomic->knownCount === null || $atomic->knownCount === 0)) {
+                    return false;
+                }
+
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
     }
 }

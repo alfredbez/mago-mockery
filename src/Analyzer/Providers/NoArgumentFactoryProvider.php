@@ -7,20 +7,25 @@ namespace AlfredBez\MagoMockery\Analyzer\Providers;
 use Mago\Sdk\Analyzer\CallableSignatureOverride;
 use Mago\Sdk\Analyzer\CallableSignatureProviderContext;
 use Mago\Sdk\Analyzer\EffectiveCallableSignature;
+use Mago\Sdk\Analyzer\Invocation;
 use Mago\Sdk\Analyzer\MethodReturnTypeProvider;
 use Mago\Sdk\Analyzer\MethodTarget;
 use Mago\Sdk\Analyzer\ReturnTypeProviderContext;
 use Mago\Sdk\Analyzer\Type;
 use Mago\Sdk\Analyzer\Type\CallableParameter;
+use Mago\Sdk\Analyzer\Type\KeyedArrayType;
+use Mago\Sdk\Analyzer\Type\ListType;
+use Mago\Sdk\Analyzer\Type\NamedObjectType;
+use Mago\Sdk\Analyzer\Type\SimpleAtomicType;
+use Mago\Sdk\Analyzer\Type\SimpleAtomicTypeKind;
 
 /**
- * Factory and verification methods called without arguments return a higher-order message.
+ * Factory and verification methods called in higher-order form return a HigherOrderMessage.
  *
- * `shouldReceive()`, `shouldNotReceive()`, `expects()`, `shouldHaveReceived()`, and
- * `shouldNotHaveReceived()` switch to HigherOrderMessage / ExpectsHigherOrderMessage
- * when invoked with no arguments. `LegacyMockInterface::shouldHaveReceived()` and
- * `shouldNotHaveReceived()` declare `$method` without a default, so this provider also
- * supplies the optional zero-argument signature when called without arguments.
+ * `shouldReceive()`, `shouldNotReceive()`, `allows()` / `allows([])`, `expects()` / `expects(null)`,
+ * `shouldHaveReceived()` / `shouldHaveReceived(null)`, and `shouldNotHaveReceived()` /
+ * `shouldNotHaveReceived(null)` return a HigherOrderMessage (or ExpectsHigherOrderMessage)
+ * parameterized with the forwarded call's runtime return type.
  */
 final class NoArgumentFactoryProvider implements MethodReturnTypeProvider, CallableSignatureOverride
 {
@@ -33,6 +38,7 @@ final class NoArgumentFactoryProvider implements MethodReturnTypeProvider, Calla
     private const HIGHER_ORDER_METHODS = [
         'shouldReceive',
         'shouldNotReceive',
+        'allows',
         'expects',
         'shouldHaveReceived',
         'shouldNotHaveReceived',
@@ -52,18 +58,14 @@ final class NoArgumentFactoryProvider implements MethodReturnTypeProvider, Calla
             }
         }
 
-        $targets[] = MethodTarget::exact('Mockery\\CompositeExpectation', 'shouldReceive');
-        $targets[] = MethodTarget::exact('Mockery\\CompositeExpectation', 'shouldNotReceive');
+        $targets[] = MethodTarget::exact(CompositeExpectationProvider::COMPOSITE, 'shouldReceive');
+        $targets[] = MethodTarget::exact(CompositeExpectationProvider::COMPOSITE, 'shouldNotReceive');
 
         return $targets;
     }
 
     public function getCallableSignature(CallableSignatureProviderContext $context): ?EffectiveCallableSignature
     {
-        if ($context->invocation->arguments !== []) {
-            return null;
-        }
-
         if (!in_array(strtolower($context->invocation->name), self::OPTIONAL_METHOD_VERIFIERS, true)) {
             return null;
         }
@@ -77,11 +79,15 @@ final class NoArgumentFactoryProvider implements MethodReturnTypeProvider, Calla
                 ),
                 new CallableParameter(
                     name: '$args',
-                    type: Type::mixed(),
+                    type: Type::union(
+                        Type::array(Type::union(Type::int(), Type::string()), Type::mixed()),
+                        Type::namedObject('Closure'),
+                        Type::null(),
+                    ),
                     hasDefault: true,
                 ),
             ],
-            allowsNamedArguments: false,
+            allowsNamedArguments: true,
             displayName: ($context->invocation->declaringClass ?? 'Mockery\\LegacyMockInterface')
                 . '::'
                 . $context->invocation->name,
@@ -90,14 +96,103 @@ final class NoArgumentFactoryProvider implements MethodReturnTypeProvider, Calla
 
     public function getReturnType(ReturnTypeProviderContext $context): ?Type
     {
-        if ($context->invocation->arguments !== []) {
+        $invocation = $context->invocation;
+        if (!self::isHigherOrderInvocation($invocation)) {
             return null;
         }
 
-        return Type::namedObject(
-            strtolower($context->invocation->name) === 'expects'
-                ? 'Mockery\\ExpectsHigherOrderMessage'
-                : 'Mockery\\HigherOrderMessage',
-        );
+        $lower = strtolower($invocation->name);
+        $mockType = $invocation->declaringClass === CompositeExpectationProvider::COMPOSITE
+            ? CompositeExpectationProvider::extractMockType($invocation->receiverType)
+            : $invocation->receiverType;
+
+        $forwardedReturnType = match ($lower) {
+            'shouldhavereceived' => Type::namedObject(VerificationProvider::DIRECTOR),
+            'shouldnothavereceived' => Type::void(),
+            default => CompositeExpectationProvider::typeWithMock($mockType),
+        };
+
+        $class = $lower === 'expects'
+            ? 'Mockery\\ExpectsHigherOrderMessage'
+            : 'Mockery\\HigherOrderMessage';
+
+        return Type::fromAtomic(new NamedObjectType(
+            name: $class,
+            parameters: [$forwardedReturnType],
+            variances: null,
+            static: false,
+            isThis: false,
+            intersections: null,
+            remappedParameters: false,
+        ));
+    }
+
+    private static function isHigherOrderInvocation(Invocation $invocation): bool
+    {
+        $args = $invocation->arguments;
+        if ($args === []) {
+            return true;
+        }
+
+        $lower = strtolower($invocation->name);
+        $firstType = $args[0]->type;
+        if ($firstType === null) {
+            return false;
+        }
+
+        if (in_array($lower, ['expects', 'shouldhavereceived', 'shouldnothavereceived'], true)) {
+            return self::isNullType($firstType);
+        }
+
+        if ($lower === 'allows') {
+            return self::isEmptyArrayType($firstType);
+        }
+
+        return false;
+    }
+
+    private static function isNullType(?Type $type): bool
+    {
+        if ($type === null || count($type->atomicTypes) !== 1) {
+            return false;
+        }
+
+        $atomic = $type->atomicTypes[0];
+
+        return $atomic instanceof SimpleAtomicType && $atomic->kind === SimpleAtomicTypeKind::Null;
+    }
+
+    private static function isEmptyArrayType(Type $type): bool
+    {
+        if (count($type->atomicTypes) !== 1) {
+            return false;
+        }
+
+        $atomic = $type->atomicTypes[0];
+        if ($atomic instanceof ListType) {
+            return !$atomic->nonEmpty && (
+                $atomic->knownCount === 0
+                || ($atomic->knownElements === [] && self::isNeverType($atomic->elementType))
+            );
+        }
+
+        if ($atomic instanceof KeyedArrayType) {
+            return !$atomic->nonEmpty
+                && $atomic->keyType === null
+                && ($atomic->knownItems === null || $atomic->knownItems === []);
+        }
+
+        return false;
+    }
+
+    private static function isNeverType(Type $type): bool
+    {
+        if (count($type->atomicTypes) !== 1) {
+            return false;
+        }
+
+        $atomic = $type->atomicTypes[0];
+
+        return $atomic instanceof SimpleAtomicType && $atomic->kind === SimpleAtomicTypeKind::Never;
     }
 }

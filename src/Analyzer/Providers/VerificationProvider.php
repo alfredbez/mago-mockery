@@ -8,22 +8,26 @@ use Mago\Sdk\Analyzer\MethodReturnTypeProvider;
 use Mago\Sdk\Analyzer\MethodTarget;
 use Mago\Sdk\Analyzer\ReturnTypeProviderContext;
 use Mago\Sdk\Analyzer\Type;
+use Mago\Sdk\Analyzer\Type\SimpleAtomicType;
+use Mago\Sdk\Analyzer\Type\SimpleAtomicTypeKind;
 
 /**
- * shouldHaveReceived('name') returns a VerificationDirector.
+ * shouldHaveReceived('name') and shouldHaveBeenCalled() return a VerificationDirector,
+ * while shouldNotHaveReceived('name') and shouldNotHaveBeenCalled() return void (null).
  *
- * LegacyMockInterface documents `@return self`, so `->with()->once()` chains sit
- * on the mock type and Mago reports them as missing methods. At runtime Mockery
- * returns a VerificationDirector, which declares the verification API.
- *
- * The no-argument form forwards to a HigherOrderMessage and stays with
- * NoArgumentFactoryProvider.
+ * The no-argument and explicit-null forms of shouldHaveReceived() / shouldNotHaveReceived()
+ * return a HigherOrderMessage and belong to NoArgumentFactoryProvider.
  */
 final class VerificationProvider implements MethodReturnTypeProvider
 {
     public const DIRECTOR = 'Mockery\\VerificationDirector';
 
-    private const VERIFIERS = ['shouldHaveReceived', 'shouldNotHaveReceived', 'shouldHaveBeenCalled', 'shouldNotHaveBeenCalled'];
+    private const VERIFIERS = [
+        'shouldHaveReceived',
+        'shouldNotHaveReceived',
+        'shouldHaveBeenCalled',
+        'shouldNotHaveBeenCalled',
+    ];
 
     public function getTargets(): array
     {
@@ -39,12 +43,37 @@ final class VerificationProvider implements MethodReturnTypeProvider
 
     public function getReturnType(ReturnTypeProviderContext $context): ?Type
     {
-        // shouldHaveReceived() / shouldNotHaveReceived() without a method name
-        // return a higher-order message; the *BeenCalled forms always verify.
-        if ($context->invocation->arguments === [] && !str_ends_with(strtolower($context->invocation->name), 'beencalled')) {
+        $lower = strtolower($context->invocation->name);
+        if ($lower === 'shouldhavebeencalled') {
+            return Type::namedObject(self::DIRECTOR);
+        }
+
+        if ($lower === 'shouldnothavebeencalled') {
+            return Type::void();
+        }
+
+        $first = $context->invocation->arguments[0] ?? null;
+        if ($first === null || self::containsNull($first->type)) {
             return null;
         }
 
-        return Type::namedObject(self::DIRECTOR);
+        return $lower === 'shouldnothavereceived'
+            ? Type::void()
+            : Type::namedObject(self::DIRECTOR);
+    }
+
+    private static function containsNull(?Type $type): bool
+    {
+        if ($type === null) {
+            return false;
+        }
+
+        foreach ($type->atomicTypes as $atomic) {
+            if ($atomic instanceof SimpleAtomicType && $atomic->kind === SimpleAtomicTypeKind::Null) {
+                return true;
+            }
+        }
+
+        return false;
     }
 }

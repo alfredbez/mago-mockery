@@ -35,27 +35,29 @@ $expected = [
             'invalid-argument' => 1,
         ],
         'tests/fixtures/Negative.php' => [
-            // unknown method on the mock and after getMock()
-            'non-existent-method' => 2,
+            // unknown methods on mock, after getMock(), after fluent builders, after higher-order getMock(),
+            // plus Expectation method `andReturn` called on VerificationDirector
+            'non-existent-method' => 6,
             // totallyFakeExpectationMethod on CompositeExpectation
             'non-documented-method' => 1,
             // Greeter mock passed where an ApiClient is expected + times('not-an-int')
             'invalid-argument' => 2,
-            // chaining after CompositeExpectation::add() which returns void
-            'invalid-method-access' => 1,
+            // chaining after void returns: CompositeExpectation::add(), shouldNotHaveReceived('name'),
+            // shouldNotHaveBeenCalled(), and higher-order shouldNotHaveReceived()->greet()
+            'invalid-method-access' => 4,
         ],
     ],
     true => [
         // Without the extension every mock is a plain MockInterface.
         'tests/fixtures/ExpectationChains.php' => [
-            // compositeExpectationChains()/verificationChains(): Expectation
-            // and LegacyMockInterface are not the runtime types, so the chains
-            // degrade to mixed/null/too-few-arguments.
-            'invalid-method-access' => 1,
+            // compositeExpectationChains()/verificationChains()/higherOrderMessages()/fluentMockBuilders():
+            // Expectation and LegacyMockInterface are not the runtime types, so the chains
+            // degrade to mixed/null/too-few-arguments/non-existent-method.
             'mixed-assignment' => 2,
-            'mixed-method-access' => 4,
-            'non-documented-method' => 12,
-            'non-existent-method' => 8,
+            'mixed-method-access' => 7,
+            'non-documented-method' => 27,
+            'non-existent-method' => 22,
+            'null-argument' => 1,
             'possible-method-access-on-null' => 1,
             'too-few-arguments' => 2,
         ],
@@ -69,9 +71,13 @@ $expected = [
         ],
         'tests/fixtures/Negative.php' => [
             'invalid-argument' => 2,
+            'invalid-method-access' => 2,
             'mixed-method-access' => 1,
-            'non-existent-method' => 4,
+            'non-documented-method' => 8,
+            'non-existent-method' => 12,
+            'possible-method-access-on-null' => 1,
             'possibly-invalid-argument' => 1,
+            'too-few-arguments' => 2,
         ],
     ],
 ];
@@ -126,6 +132,54 @@ $failures += assertMessageCount(
     'tests/fixtures/Negative.php',
     'invalid-argument',
     'found `MockeryFixture\\Greeter&Mockery\\MockInterface`',
+    1,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/Negative.php',
+    'invalid-method-access',
+    'withAnyArgs()',
+    1,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/Negative.php',
+    'invalid-method-access',
+    'once()',
+    2,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/Negative.php',
+    'non-existent-method',
+    'Method `andReturn` does not exist on type `Mockery\\VerificationDirector`',
+    1,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/Negative.php',
+    'non-existent-method',
+    'missingAfterPartial',
+    1,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/Negative.php',
+    'non-existent-method',
+    'missingAfterAllowsMap',
+    1,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/Negative.php',
+    'non-existent-method',
+    'missingAfterHigherOrder',
     1,
 );
 

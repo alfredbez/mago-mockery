@@ -65,6 +65,55 @@ final class Negative extends Support
     }
 
     /**
+     * shouldNotHaveReceived('name') returns void/null at runtime; chaining fails.
+     */
+    public function chainingAfterShouldNotHaveReceived(): void
+    {
+        Mockery::mock(Greeter::class)->shouldNotHaveReceived('countGreetings')->withAnyArgs();
+    }
+
+    /**
+     * shouldNotHaveBeenCalled() returns void/null at runtime; chaining fails.
+     */
+    public function chainingAfterShouldNotHaveBeenCalled(): void
+    {
+        Mockery::mock(Greeter::class)->shouldNotHaveBeenCalled()->once();
+    }
+
+    /**
+     * Higher-order shouldNotHaveReceived()->greet() returns void/null at runtime.
+     */
+    public function chainingAfterHigherOrderShouldNotHaveReceived(): void
+    {
+        Mockery::mock(Greeter::class)->shouldNotHaveReceived()->greet('x')->once();
+    }
+
+    /**
+     * Higher-order shouldHaveReceived()->greet() returns VerificationDirector, not Expectation.
+     */
+    public function expectationMethodOnHigherOrderVerification(): void
+    {
+        Mockery::mock(Greeter::class)->shouldHaveReceived()->greet('x')->andReturn('hi');
+    }
+
+    /**
+     * Fluent mock builders preserve the mocked type, so unknown methods still fail.
+     */
+    public function unknownMethodAfterFluentBuilders(): void
+    {
+        Mockery::mock(Greeter::class)->makePartial()->missingAfterPartial();
+        Mockery::mock(Greeter::class)->allows(['greet' => 'hi'])->missingAfterAllowsMap();
+    }
+
+    /**
+     * Higher-order getMock() preserves the mocked type, so unknown methods still fail.
+     */
+    public function unknownMethodAfterHigherOrderGetMock(): void
+    {
+        Mockery::mock(Greeter::class)->shouldReceive()->greet('x')->andReturn('hi')->getMock()->missingAfterHigherOrder();
+    }
+
+    /**
      * KNOWN GAP (Mago 1.60.2): an extension-supplied intersection compared
      * against an intersection parameter is accepted. This call must report
      * "argument #1 expects Greeter&MockInterface, found ApiClient&MockInterface"

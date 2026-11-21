@@ -257,6 +257,19 @@
       "versions": "Runtime-verified on PHP 8.3, Mockery 1.6.15, Mago 1.60.2.",
       "coverage": ["tests/strict-fixtures/StrictMethods.php", "tests/strict-methods.toml", "tests/runtime/ExpectationsAndVerificationRuntimeTest.php", "tests/run.php"],
       "status": "covered"
+    },
+    {
+      "id": "MOCKERY-G003",
+      "title": "Direct calls to protected methods on partial mocks after shouldAllowMockingProtectedMethods()",
+      "sources": ["phpstan-mockery-test", "mockery-mock"],
+      "fixture": "<?php class Base { protected function secret(): bool { return true; } } $m = Mockery::mock(Base::class)->makePartial()->shouldAllowMockingProtectedMethods(); $m->secret();",
+      "semantics": "At runtime Mockery exposes protected methods through its generated proxy when shouldAllowMockingProtectedMethods() is enabled. In laravel/framework v12.73.0, BroadcastedEventsTest.php (4 sites on Illuminate\\Events\\Dispatcher, which uses Macroable::__call) emits non-documented-method while QueueDatabaseQueueUnitTest.php:194 calls protected buildDatabaseRecord() without makePartial() or shouldAllowMockingProtectedMethods() and emits invalid-method-access.",
+      "analyzer_expectation": "Deliberate boundary on Mago 1.60.2: IssueFilterContext exposes only source text and ReportedIssue (no receiver type), so filtering invalid-method-access or non-documented-method by text risks suppressing genuine visibility or magic-method bugs on non-mock objects in the same scope.",
+      "negative_control": "Keep native Mago visibility and non-documented-method checks enabled on mocks until Mago's IssueFilterContext exposes receiver types.",
+      "priority": "P2",
+      "versions": "Investigated on Mago 1.60.2 / PHP 8.3 against laravel/framework v12.73.0.",
+      "coverage": [],
+      "status": "candidate"
     }
   ]
 }

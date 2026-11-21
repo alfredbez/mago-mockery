@@ -5,6 +5,15 @@ declare(strict_types=1);
 namespace MockeryFixture;
 
 use Mockery;
+use Mockery\Expectation;
+use Mockery\Matcher\Any;
+use Mockery\Matcher\Closure as ClosureMatcher;
+use Mockery\Matcher\Contains;
+use Mockery\Matcher\HasKey;
+use Mockery\Matcher\HasValue;
+use Mockery\Matcher\MustBe;
+use Mockery\Matcher\Subset;
+use Mockery\Matcher\Type as TypeMatcher;
 use RuntimeException;
 
 /**
@@ -14,6 +23,7 @@ use RuntimeException;
  */
 final class ExpectationChains
 {
+    private mixed $captured = null;
     public function higherOrderMessages(): void
     {
         $greeter = Mockery::mock(Greeter::class);
@@ -100,6 +110,75 @@ final class ExpectationChains
         // shouldHaveReceived() and shouldHaveBeenCalled() return a VerificationDirector at runtime.
         $greeter->shouldHaveReceived('greet')->with('x')->once();
         $greeter->shouldHaveReceived('greet', ['x'])->once();
+        $greeter->shouldHaveReceived('greet')->withArgs(['x'])->once();
+        $greeter->shouldHaveReceived('greet')->withArgs(static fn (string $name): bool => $name === 'x')->once();
         $greeter->shouldHaveBeenCalled()->once();
+    }
+
+    public function expectationMethodsAndMatchers(Expectation $expectation): void
+    {
+        $greeter = Mockery::mock(Greeter::class);
+
+        $greeter->shouldReceive('greet')
+            ->andReturnUsing(static fn (string $name): string => $name)
+            ->andReturnValues(['a', 'b'])
+            ->andReturnSelf()
+            ->andReturnArg(0)
+            ->andSet('label', 'first', 'second')
+            ->withArgs(['world'])
+            ->withArgs(static fn (string $name): bool => $name !== '')
+            ->withSomeOfArgs('world')
+            ->getMock()
+            ->greet('world');
+
+        $expectation
+            ->andReturnUsing(static fn (string $name): string => $name)
+            ->andReturnValues(['a', 'b'])
+            ->andReturnSelf()
+            ->andReturnArg(0)
+            ->andSet('label', 'first', 'second')
+            ->withArgs(['world'])
+            ->withArgs(static fn (string $name): bool => $name !== '')
+            ->withSomeOfArgs('world');
+
+        $on = Mockery::on(static fn (string $name): bool => $name !== '');
+        $capture = Mockery::capture($this->captured);
+        $subset = Mockery::subset(['a' => 1]);
+        $subsetLoose = Mockery::subset(['a' => 1], false);
+        $type = Mockery::type('string');
+        $any = Mockery::any();
+        $mustBe = Mockery::mustBe('exact');
+        $contains = Mockery::contains('a', 'b');
+        $hasKey = Mockery::hasKey('id');
+        $hasValue = Mockery::hasValue(1);
+
+        $this->acceptMatchers($on, $capture, $subset, $subsetLoose, $type, $any, $mustBe, $contains, $hasKey, $hasValue);
+
+        $greeter->shouldReceive('greet')->with($on)->andReturn('ok');
+        $greeter->shouldReceive('greet')->with($capture)->andReturn('ok');
+        $greeter->shouldReceive('greet')->withArgs([$subset])->andReturn('ok');
+        $greeter->shouldReceive('greet')->with(Mockery::pattern('/^hi/'))->andReturn('ok');
+        $greeter->shouldReceive('greet')->with(Mockery::ducktype('greet'))->andReturn('ok');
+        $greeter->shouldReceive('greet')->with($type)->andReturn('ok');
+        $greeter->shouldReceive('greet')->with($any)->andReturn('ok');
+        $greeter->shouldReceive('greet')->with($mustBe)->andReturn('ok');
+        $greeter->shouldReceive('greet')->with($contains)->andReturn('ok');
+        $greeter->shouldReceive('greet')->with($hasKey)->andReturn('ok');
+        $greeter->shouldReceive('greet')->with($hasValue)->andReturn('ok');
+    }
+
+    private function acceptMatchers(
+        ClosureMatcher $on,
+        ClosureMatcher $capture,
+        Subset $subset,
+        Subset $subsetLoose,
+        TypeMatcher $type,
+        Any $any,
+        MustBe $mustBe,
+        Contains $contains,
+        HasKey $hasKey,
+        HasValue $hasValue,
+    ): void {
+        unset($on, $capture, $subset, $subsetLoose, $type, $any, $mustBe, $contains, $hasKey, $hasValue);
     }
 }

@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace AlfredBez\MagoMockery\Analyzer;
 
 use AlfredBez\MagoMockery\Analyzer\Providers\CompositeExpectationProvider;
+use AlfredBez\MagoMockery\Analyzer\Providers\ExpectationAndMatcherSignatureProvider;
 use AlfredBez\MagoMockery\Analyzer\Providers\HigherOrderMessageProvider;
 use AlfredBez\MagoMockery\Analyzer\Providers\MockFactoryReturnTypeProvider;
 use AlfredBez\MagoMockery\Analyzer\Providers\MockHelperFunctionReturnTypeProvider;
@@ -33,6 +34,7 @@ final class MockeryPlugin implements Plugin
         $registry->registerFunctionReturnTypeProvider(new MockHelperFunctionReturnTypeProvider());
         $registry->registerMethodReturnTypeProvider(new NoArgumentFactoryProvider());
         $registry->registerMethodReturnTypeProvider(new CompositeExpectationProvider());
+        $registry->registerMethodReturnTypeProvider(new ExpectationAndMatcherSignatureProvider());
         $registry->registerMethodReturnTypeProvider(new VerificationProvider());
         $registry->registerMethodReturnTypeProvider(new HigherOrderMessageProvider());
     }

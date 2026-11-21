@@ -116,6 +116,8 @@ final class CompositeExpectationProvider implements MethodReturnTypeProvider, Ca
                 // Mockery's Expectation::andSet() docblock mistakenly types variadic values as `array<mixed> ...$values`.
                 if ($lower === 'andset' && $variadic) {
                     $type = Type::mixed();
+                } elseif ($lower === 'andreturnarg' && !$variadic) {
+                    $type = Type::nonNegativeInt();
                 }
 
                 $parameters[] = new CallableParameter(

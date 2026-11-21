@@ -113,7 +113,7 @@ final class MockTypeFactory
             }
 
             if (str_ends_with($part, ']') && str_contains($part, '[')) {
-                $candidate = ltrim(explode('[', $part, 2)[0], '\\');
+                $candidate = ltrim(trim(explode('[', $part, 2)[0]), '\\');
                 if ($candidate !== '') {
                     $names[] = $candidate;
                 }

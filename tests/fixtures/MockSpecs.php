@@ -34,6 +34,28 @@ final class MockSpecs extends Support
         $excluded = Mockery::mock(Greeter::class . '[!countGreetings]');
         $excluded->greet('world');
         $this->acceptGreeter($excluded);
+
+        $spacedPartial = Mockery::mock(ApiClient::class . ' [fetch]');
+        $spacedPartial->fetch(2);
+        $this->acceptApiClient($spacedPartial);
+
+        $pipePartial = Mockery::mock(ApiClient::class . '[fetch]|' . Greeter::class);
+        $pipePartial->fetch(3);
+        $pipePartial->greet('pipe');
+        $this->acceptApiClient($pipePartial);
+
+        $separatePartialAndIface = Mockery::mock(ApiClient::class . '[fetch]', Greeter::class);
+        $separatePartialAndIface->fetch(4);
+        $separatePartialAndIface->greet('separate');
+        $this->acceptApiClient($separatePartialAndIface);
+
+        $aliasWithPipe = Mockery::mock('alias:' . ApiClient::class . '|' . Greeter::class);
+        $aliasWithPipe->fetch(5);
+        $aliasWithPipe->greet('alias-pipe');
+
+        $overloadWithIface = Mockery::mock('overload:' . ApiClient::class, Greeter::class);
+        $overloadWithIface->fetch(6);
+        $overloadWithIface->greet('overload-iface');
     }
 
     public function commaSeparatedAndConstructorArgs(): void
@@ -55,6 +77,21 @@ final class MockSpecs extends Support
             $mock->shouldReceive('greet')->andReturn('hi');
         });
         $withClosure->greet('world');
+
+        $allCombined = Mockery::mock(
+            ApiClient::class,
+            Greeter::class,
+            Alpha::class,
+            [1, 2],
+            ['greet' => 'quick'],
+            static function (MockInterface $mock): void {
+                $mock->shouldReceive('fetch')->andReturn('configured');
+            },
+        );
+        $allCombined->fetch(7);
+        $allCombined->greet('all');
+        $allCombined->alpha();
+        $this->acceptApiClient($allCombined);
     }
 
     public function objectPartialNamedAndInstanceMock(): void
@@ -62,6 +99,10 @@ final class MockSpecs extends Support
         $objectPartial = Mockery::mock(new ApiClient());
         $objectPartial->fetch(1);
         $this->acceptApiClient($objectPartial);
+
+        $objectWithInterface = Mockery::mock(new GreeterImpl(), Alpha::class);
+        $objectWithInterface->greet('obj');
+        $objectWithInterface->alpha();
 
         $named = namedMock('CustomAlias', Greeter::class, Alpha::class);
         $named->greet('world');

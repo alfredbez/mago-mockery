@@ -35,9 +35,29 @@ final class Negative extends Support
     /**
      * Forwarded Expectation methods must preserve their parameter types.
      */
-    public function invalidArgumentTypeOnCompositeExpectation(): void
+    public function invalidArgumentTypeOnCompositeExpectation(Expectation $expectation): void
     {
-        Mockery::mock(Greeter::class)->shouldReceive('greet')->times('not-an-int');
+        $greeter = Mockery::mock(Greeter::class);
+        $greeter->shouldReceive('greet')->times('not-an-int');
+        $greeter->shouldReceive('greet')->andReturnArg(-1);
+        $greeter->shouldReceive('greet')->andReturnValues('not-an-array');
+        $greeter->shouldReceive('greet')->withArgs(123);
+        $greeter->shouldHaveReceived('greet')->withArgs(123);
+        $expectation->andReturnArg(-1);
+        $expectation->withArgs(123);
+    }
+
+    /**
+     * Matcher factories must reject invalid argument types.
+     */
+    public function invalidArgumentTypesOnMatchers(): void
+    {
+        Mockery::on('not-a-closure');
+        Mockery::subset('not-an-array');
+        Mockery::type(123);
+        Mockery::pattern(123);
+        Mockery::ducktype(123);
+        Mockery::hasKey([]);
     }
 
     /**

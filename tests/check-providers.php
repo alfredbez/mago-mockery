@@ -66,6 +66,8 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
     $check($targets($factory($codebase, 'Beta', 'Alpha')) === ['Beta', 'Alpha', 'Mockery\\MockInterface'], 'Reversed targets must retain the selected primary type.');
     $check($targets($factory($codebase, 'ALPHA', 'beta')) === ['ALPHA', 'beta', 'Mockery\\MockInterface'], 'Original target casing must survive repeated factories.');
     $check($targets($factory($codebase, 'Alpha', 'ALPHA')) === ['Alpha', 'Mockery\\MockInterface'], 'Duplicate targets must remain case-insensitive.');
+    $check($targets($factory($codebase, 'Alpha [foo, bar]|Beta')) === ['Alpha', 'Beta', 'Mockery\\MockInterface'], 'Pipe-separated partial specs with whitespace must resolve all targets.');
+    $check($targets($factory($codebase, 'alias:Alpha|Beta')) === ['Alpha', 'Beta', 'Mockery\\MockInterface'], 'Pipe-separated alias specs must resolve all targets.');
 
     $otherCache = new MetadataCache(2);
     $otherCache->existence[Protocol::EXISTS_CLASS_OR_INTERFACE] = ['alpha' => false, 'beta' => true];

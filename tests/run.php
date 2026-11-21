@@ -43,8 +43,8 @@ $expected = [
             'non-existent-method' => 9,
             // totallyFakeExpectationMethod on CompositeExpectation
             'non-documented-method' => 1,
-            // Greeter mock & overload:Greeter mock passed where an ApiClient is expected + times('not-an-int')
-            'invalid-argument' => 3,
+            // Greeter mock & overload:Greeter mock passed where an ApiClient is expected + invalid expectation/matcher args
+            'invalid-argument' => 15,
             // chaining after void returns: CompositeExpectation::add(), shouldNotHaveReceived('name'),
             // shouldNotHaveBeenCalled(), and higher-order shouldNotHaveReceived()->greet()
             'invalid-method-access' => 4,
@@ -56,17 +56,18 @@ $expected = [
             // compositeExpectationChains()/verificationChains()/higherOrderMessages()/fluentMockBuilders():
             // Expectation and LegacyMockInterface are not the runtime types, so the chains
             // degrade to mixed/null/too-few-arguments/non-existent-method.
+            'invalid-argument' => 4,
             'mixed-assignment' => 2,
             'mixed-method-access' => 7,
             'non-documented-method' => 27,
-            'non-existent-method' => 22,
+            'non-existent-method' => 23,
             'null-argument' => 1,
             'possible-method-access-on-null' => 1,
             'too-few-arguments' => 2,
         ],
         'tests/fixtures/MockSpecs.php' => [
-            'invalid-argument' => 7,
-            'non-existent-method' => 14,
+            'invalid-argument' => 11,
+            'non-existent-method' => 28,
             'possibly-invalid-argument' => 1,
         ],
         'tests/fixtures/Positive.php' => [
@@ -78,7 +79,7 @@ $expected = [
             'invalid-argument' => 1,
         ],
         'tests/fixtures/Negative.php' => [
-            'invalid-argument' => 3,
+            'invalid-argument' => 8,
             'invalid-method-access' => 2,
             'mixed-method-access' => 1,
             'non-documented-method' => 8,
@@ -116,6 +117,62 @@ $failures += assertMessageCount(
     'tests/fixtures/Negative.php',
     'invalid-argument',
     'CompositeExpectation::times',
+    1,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/Negative.php',
+    'invalid-argument',
+    'CompositeExpectation::andreturnarg',
+    1,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/Negative.php',
+    'invalid-argument',
+    'Expectation::andReturnArg',
+    1,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/Negative.php',
+    'invalid-argument',
+    'VerificationDirector::withArgs',
+    1,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/Negative.php',
+    'invalid-argument',
+    'Mockery::type',
+    1,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/Negative.php',
+    'invalid-argument',
+    'Mockery::pattern',
+    1,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/Negative.php',
+    'invalid-argument',
+    'Mockery::ducktype',
+    1,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/Negative.php',
+    'invalid-argument',
+    'Mockery::hasKey',
     1,
 );
 $failures += assertMessageCount(

@@ -1,3 +1,6 @@
 /vendor/
 .phpunit.cache/
 .mago/
+/bench/*.json
+/bench/__pycache__/
+/.pytest_cache/

@@ -143,6 +143,24 @@ final class ExpectationsAndVerificationRuntimeTest extends TestCase
         $mock->shouldReceive('record')->andReturnArg(-1);
     }
 
+    public function testAllowMockingNonExistentMethodsOptInContract(): void
+    {
+        $defaultMock = Mockery::mock(Recorder::class);
+        $defaultMock->shouldReceive('dynamicMethod')->once()->andReturn('ok');
+        self::assertSame('ok', $defaultMock->dynamicMethod());
+
+        $config = Mockery::getConfiguration();
+        $previous = $config->mockingNonExistentMethodsAllowed();
+        $config->allowMockingNonExistentMethods(false);
+        try {
+            $strictMock = Mockery::mock(Recorder::class);
+            $this->expectException(Mockery\Exception::class);
+            $strictMock->shouldReceive('doesNotExist');
+        } finally {
+            $config->allowMockingNonExistentMethods($previous);
+        }
+    }
+
     public function testArgumentMatchersRuntimeContracts(): void
     {
         $mock = Mockery::mock(Recorder::class);

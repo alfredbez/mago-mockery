@@ -11,14 +11,26 @@ use AlfredBez\MagoMockery\Analyzer\Providers\MockeryPhpUnitInitializer;
 use AlfredBez\MagoMockery\Analyzer\Providers\MockFactoryReturnTypeProvider;
 use AlfredBez\MagoMockery\Analyzer\Providers\MockHelperFunctionReturnTypeProvider;
 use AlfredBez\MagoMockery\Analyzer\Providers\NoArgumentFactoryProvider;
+use AlfredBez\MagoMockery\Analyzer\Providers\StrictMockedMethodHook;
 use AlfredBez\MagoMockery\Analyzer\Providers\VerificationProvider;
 use Mago\Sdk\Analyzer\MethodTarget;
 use Mago\Sdk\Analyzer\Plugin;
 use Mago\Sdk\Analyzer\PluginDefinition;
 use Mago\Sdk\Analyzer\PluginRegistry;
 
+use function getenv;
+use function in_array;
+use function strtolower;
+use function trim;
+
 final class MockeryPlugin implements Plugin
 {
+    public const STRICT_METHODS_ENV = 'MAGO_MOCKERY_STRICT_METHODS';
+
+    public function __construct(
+        private readonly ?bool $strictMockedMethods = null,
+    ) {}
+
     public function getDefinition(): PluginDefinition
     {
         return new PluginDefinition(
@@ -45,5 +57,24 @@ final class MockeryPlugin implements Plugin
         $registry->registerEntryPoint(MethodTarget::exact('PHPUnit\\Framework\\TestCase', 'mockeryAssertPostConditions'));
         $registry->registerEntryPoint(MethodTarget::exact('PHPUnit\\Framework\\TestCase', 'startMockery'));
         $registry->registerEntryPoint(MethodTarget::exact('PHPUnit\\Framework\\TestCase', 'purgeMockeryContainer'));
+
+        if ($this->isStrictMockedMethodsEnabled()) {
+            $registry->registerMethodCallAnalysisHook(new StrictMockedMethodHook(variadicMethods: true));
+            $registry->registerMethodCallAnalysisHook(new StrictMockedMethodHook(variadicMethods: false));
+        }
+    }
+
+    private function isStrictMockedMethodsEnabled(): bool
+    {
+        if ($this->strictMockedMethods !== null) {
+            return $this->strictMockedMethods;
+        }
+
+        $raw = getenv(self::STRICT_METHODS_ENV);
+        if ($raw === false) {
+            return false;
+        }
+
+        return in_array(strtolower(trim($raw)), ['1', 'true', 'yes', 'on'], true);
     }
 }

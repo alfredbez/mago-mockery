@@ -317,6 +317,37 @@ $failures += assertMessageCount(
     1,
 );
 
+$strictDefault = analyze(false, 'tests/strict-methods.toml');
+$strictEnabled = analyze(false, 'tests/strict-methods.toml', ['MAGO_MOCKERY_STRICT_METHODS' => '1']);
+$failures += assertHistograms('strict default mode', $strictDefault, [
+    'tests/strict-fixtures/StrictMethods.php' => [],
+]);
+$failures += assertHistograms('strict enabled mode', $strictEnabled, [
+    'tests/strict-fixtures/StrictMethods.php' => [
+        'alfredbez/mockery/unknown-mocked-method' => 9,
+    ],
+]);
+foreach ([
+    'doesNotExist',
+    'missingChained',
+    'missingNotReceive',
+    'missingAllows',
+    'missingMapKey',
+    'missingExpects',
+    'missingHaveReceived',
+    'missingNotHaveReceived',
+    'missingDemeter',
+] as $missingMethod) {
+    $failures += assertMessageCount(
+        'strict enabled mode',
+        $strictEnabled,
+        'tests/strict-fixtures/StrictMethods.php',
+        'alfredbez/mockery/unknown-mocked-method',
+        "Method `{$missingMethod}` does not exist on mocked type `MockeryFixture\\Strict\\StrictGreeter`",
+        1,
+    );
+}
+
 if ($failures > 0) {
     fwrite(STDERR, "\n{$failures} assertion(s) failed\n");
     exit(1);

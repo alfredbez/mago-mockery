@@ -29,6 +29,8 @@ final class ExpectationAndMatcherSignatureProvider implements MethodReturnTypePr
             MethodTarget::exact('Mockery', 'pattern'),
             MethodTarget::exact('Mockery', 'ducktype'),
             MethodTarget::exact('Mockery', 'hasKey'),
+            MethodTarget::exact('Mockery', 'isEqual'),
+            MethodTarget::exact('Mockery', 'isSame'),
         ];
     }
 
@@ -113,6 +115,14 @@ final class ExpectationAndMatcherSignatureProvider implements MethodReturnTypePr
 
     public function getReturnType(ReturnTypeProviderContext $context): ?Type
     {
-        return null;
+        if (strtolower($context->invocation->declaringClass ?? '') !== 'mockery') {
+            return null;
+        }
+
+        return match (strtolower($context->invocation->name)) {
+            'isequal' => Type::namedObject('Mockery\\Matcher\\IsEqual'),
+            'issame' => Type::namedObject('Mockery\\Matcher\\IsSame'),
+            default => null,
+        };
     }
 }

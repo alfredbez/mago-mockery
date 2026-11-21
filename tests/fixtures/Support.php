@@ -34,6 +34,14 @@ final class ApiClient
     }
 }
 
+trait LoggableTrait
+{
+    public function logTraitMessage(string $message): string
+    {
+        return $message;
+    }
+}
+
 class Support
 {
     public function acceptGreeter(Greeter&MockInterface $greeter): void

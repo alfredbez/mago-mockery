@@ -7,11 +7,17 @@ namespace MockeryFixture;
 use Mockery;
 use Mockery\Expectation;
 use Mockery\Matcher\Any;
+use Mockery\Matcher\AnyOf;
+use Mockery\Matcher\AndAnyOtherArgs;
 use Mockery\Matcher\Closure as ClosureMatcher;
 use Mockery\Matcher\Contains;
 use Mockery\Matcher\HasKey;
 use Mockery\Matcher\HasValue;
+use Mockery\Matcher\IsEqual;
+use Mockery\Matcher\IsSame;
 use Mockery\Matcher\MustBe;
+use Mockery\Matcher\Not;
+use Mockery\Matcher\NotAnyOf;
 use Mockery\Matcher\Subset;
 use Mockery\Matcher\Type as TypeMatcher;
 use RuntimeException;
@@ -151,8 +157,15 @@ final class ExpectationChains
         $contains = Mockery::contains('a', 'b');
         $hasKey = Mockery::hasKey('id');
         $hasValue = Mockery::hasValue(1);
+        $isEqual = Mockery::isEqual('expected');
+        $isSame = Mockery::isSame('expected');
+        $anyOf = Mockery::anyOf('a', 'b');
+        $notAnyOf = Mockery::notAnyOf('c', 'd');
+        $not = Mockery::not('e');
+        $andAnyOthers = Mockery::andAnyOtherArgs();
 
         $this->acceptMatchers($on, $capture, $subset, $subsetLoose, $type, $any, $mustBe, $contains, $hasKey, $hasValue);
+        $this->acceptExtendedMatchers($isEqual, $isSame, $anyOf, $notAnyOf, $not, $andAnyOthers);
 
         $greeter->shouldReceive('greet')->with($on)->andReturn('ok');
         $greeter->shouldReceive('greet')->with($capture)->andReturn('ok');
@@ -165,6 +178,12 @@ final class ExpectationChains
         $greeter->shouldReceive('greet')->with($contains)->andReturn('ok');
         $greeter->shouldReceive('greet')->with($hasKey)->andReturn('ok');
         $greeter->shouldReceive('greet')->with($hasValue)->andReturn('ok');
+        $greeter->shouldReceive('greet')->with($isEqual)->andReturn('ok');
+        $greeter->shouldReceive('greet')->with($isSame)->andReturn('ok');
+        $greeter->shouldReceive('greet')->with($anyOf)->andReturn('ok');
+        $greeter->shouldReceive('greet')->with($notAnyOf)->andReturn('ok');
+        $greeter->shouldReceive('greet')->with($not)->andReturn('ok');
+        $greeter->shouldReceive('greet')->with('world', $andAnyOthers)->andReturn('ok');
     }
 
     private function acceptMatchers(
@@ -180,5 +199,16 @@ final class ExpectationChains
         HasValue $hasValue,
     ): void {
         unset($on, $capture, $subset, $subsetLoose, $type, $any, $mustBe, $contains, $hasKey, $hasValue);
+    }
+
+    private function acceptExtendedMatchers(
+        IsEqual $isEqual,
+        IsSame $isSame,
+        AnyOf $anyOf,
+        NotAnyOf $notAnyOf,
+        Not $not,
+        AndAnyOtherArgs $andAnyOthers,
+    ): void {
+        unset($isEqual, $isSame, $anyOf, $notAnyOf, $not, $andAnyOthers);
     }
 }

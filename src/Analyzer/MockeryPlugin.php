@@ -12,6 +12,7 @@ use AlfredBez\MagoMockery\Analyzer\Providers\MockFactoryReturnTypeProvider;
 use AlfredBez\MagoMockery\Analyzer\Providers\MockHelperFunctionReturnTypeProvider;
 use AlfredBez\MagoMockery\Analyzer\Providers\NoArgumentFactoryProvider;
 use AlfredBez\MagoMockery\Analyzer\Providers\StrictMockedMethodHook;
+use AlfredBez\MagoMockery\Analyzer\Providers\TraitMockConstantIssueFilter;
 use AlfredBez\MagoMockery\Analyzer\Providers\VerificationProvider;
 use Mago\Sdk\Analyzer\MethodTarget;
 use Mago\Sdk\Analyzer\Plugin;
@@ -52,6 +53,7 @@ final class MockeryPlugin implements Plugin
         $registry->registerMethodReturnTypeProvider(new VerificationProvider());
         $registry->registerMethodReturnTypeProvider(new HigherOrderMessageProvider());
         $registry->registerClassInitializerProvider(new MockeryPhpUnitInitializer());
+        $registry->registerIssueFilterHook(new TraitMockConstantIssueFilter());
         $registry->registerEntryPoint(MethodTarget::exact('Mockery\\Adapter\\Phpunit\\MockeryTestCase', 'mockeryTestSetUp'));
         $registry->registerEntryPoint(MethodTarget::exact('Mockery\\Adapter\\Phpunit\\MockeryTestCase', 'mockeryTestTearDown'));
         $registry->registerEntryPoint(MethodTarget::exact('PHPUnit\\Framework\\TestCase', 'mockeryAssertPostConditions'));

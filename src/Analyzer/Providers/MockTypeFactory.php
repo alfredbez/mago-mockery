@@ -168,9 +168,31 @@ final class MockTypeFactory
             return;
         }
 
-        if ($codebase->classOrInterfaceExists($candidate)) {
+        if ($codebase->classOrInterfaceExists($candidate) || $codebase->traitExists($candidate)) {
             $classes[$lower] = $candidate;
         }
+    }
+
+    /**
+     * Resolves Mockery::fetchMock($name) and Container::fetchMock($name) to `(T&MockInterface)|null`.
+     */
+    public static function fromFetchMock(Invocation $invocation, Codebase $codebase): ?Type
+    {
+        $literal = $invocation->getArgument(0, 'name')?->type?->getLiteralString();
+        if ($literal === null) {
+            return null;
+        }
+
+        $classes = [];
+        foreach (self::extractClassesFromSpec($literal) as $candidate) {
+            self::addTargetIfValid($candidate, $codebase, $classes);
+        }
+
+        if ($classes === []) {
+            return null;
+        }
+
+        return Type::union(self::createMultiple(array_values($classes)), Type::null());
     }
 
     /**

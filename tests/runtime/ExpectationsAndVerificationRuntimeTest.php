@@ -193,6 +193,24 @@ final class ExpectationsAndVerificationRuntimeTest extends TestCase
         $hasValueMatcher = Mockery::hasValue(42);
         self::assertInstanceOf(HasValue::class, $hasValueMatcher);
 
+        $isEqualMatcher = Mockery::isEqual('eq');
+        self::assertInstanceOf(Mockery\Matcher\IsEqual::class, $isEqualMatcher);
+
+        $isSameMatcher = Mockery::isSame('same');
+        self::assertInstanceOf(Mockery\Matcher\IsSame::class, $isSameMatcher);
+
+        $anyOfMatcher = Mockery::anyOf('a', 'b');
+        self::assertInstanceOf(Mockery\Matcher\AnyOf::class, $anyOfMatcher);
+
+        $notAnyOfMatcher = Mockery::notAnyOf('c', 'd');
+        self::assertInstanceOf(Mockery\Matcher\NotAnyOf::class, $notAnyOfMatcher);
+
+        $notMatcher = Mockery::not('e');
+        self::assertInstanceOf(Mockery\Matcher\Not::class, $notMatcher);
+
+        $andAnyOthersMatcher = Mockery::andAnyOtherArgs();
+        self::assertInstanceOf(Mockery\Matcher\AndAnyOtherArgs::class, $andAnyOthersMatcher);
+
         $mock->shouldReceive('record')->with($onMatcher, $subsetMatcher)->once()->andReturn('on-subset');
         $mock->shouldReceive('record')->with('cap', $captureMatcher)->once()->andReturn('captured');
         $mock->shouldReceive('record')->with($mustBeMatcher, $containsMatcher)->once()->andReturn('must-contains');

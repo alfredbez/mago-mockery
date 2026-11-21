@@ -49,6 +49,7 @@ function providerWorkloads(): array
         $cache->existence[Protocol::EXISTS_CLASS_OR_INTERFACE][strtolower($class)] = true;
     }
     $cache->existence[Protocol::EXISTS_CLASS_OR_INTERFACE]['unknown'] = false;
+    $cache->existence[Protocol::EXISTS_TRAIT]['unknown'] = false;
 
     $span = new Span(0, 1);
     $location = new SourceLocation('bench/fixtures/Support.php', $span);

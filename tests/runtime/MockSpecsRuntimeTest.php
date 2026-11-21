@@ -48,6 +48,16 @@ class ConcreteGreeter
     }
 }
 
+trait RuntimeLoggableTrait
+{
+    public function logFromTrait(string $msg): string
+    {
+        return 'trait:' . $this->formatTraitTag($msg);
+    }
+
+    abstract public function formatTraitTag(string $msg): string;
+}
+
 final class MockSpecsRuntimeTest extends TestCase
 {
     protected function tearDown(): void
@@ -154,5 +164,20 @@ final class MockSpecsRuntimeTest extends TestCase
         self::assertSame('pipe-primary', $pipe->primary());
         self::assertSame('pipe:secondary', $pipe->secondary());
         self::assertSame('pipe-first', $pipe->first());
+    }
+
+    public function testTraitMockAndFetchMockAtRuntime(): void
+    {
+        $traitMock = Mockery::mock(RuntimeLoggableTrait::class);
+        $traitMock->shouldReceive('formatTraitTag')->once()->with('event')->andReturn('mocked-tag');
+        self::assertSame('trait:mocked-tag', $traitMock->logFromTrait('event'));
+
+        $named = Mockery::namedMock('FetchedRuntimeGreeter', FirstContract::class);
+        $named->shouldReceive('first')->once()->andReturn('from-fetched');
+        $fetched = Mockery::fetchMock('FetchedRuntimeGreeter');
+        self::assertSame($named, $fetched);
+        self::assertInstanceOf(FirstContract::class, $fetched);
+        self::assertSame('from-fetched', $fetched->first());
+        self::assertNull(Mockery::fetchMock('UnregisteredMockName'));
     }
 }

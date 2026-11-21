@@ -142,6 +142,12 @@ final class Negative extends Support
         Mockery::mock(ApiClient::class . '[fetch]')->missingOnPartialSpec();
         Mockery::mock(new GreeterImpl())->missingOnObjectPartial();
         Mockery::mock('overload:MockeryFixture\\NonExistentClass')->missingOnUnknownOverload();
+        Mockery::mock(LoggableTrait::class)->missingOnTraitMock();
+        $fetched = Mockery::fetchMock(Greeter::class);
+        $fetched->greet('unguarded-nullable-fetch');
+        if ($fetched !== null) {
+            $fetched->missingOnFetchedMock();
+        }
     }
 
     /**

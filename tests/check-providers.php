@@ -70,10 +70,12 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
     $check($targets($factory($codebase, 'alias:Alpha|Beta')) === ['Alpha', 'Beta', 'Mockery\\MockInterface'], 'Pipe-separated alias specs must resolve all targets.');
 
     $otherCache = new MetadataCache(2);
-    $otherCache->existence[Protocol::EXISTS_CLASS_OR_INTERFACE] = ['alpha' => false, 'beta' => true];
+    $otherCache->existence[Protocol::EXISTS_CLASS_OR_INTERFACE] = ['alpha' => false, 'beta' => true, 'gammatrait' => false];
+    $otherCache->existence[Protocol::EXISTS_TRAIT] = ['alpha' => false, 'gammatrait' => true];
     $otherCodebase = new Codebase($host, 2, $cancellation, $otherCache);
     $check($factory($otherCodebase, 'Alpha') === null, 'Known types must not bypass existence checks in a different codebase.');
     $check($targets($factory($otherCodebase, 'Alpha', 'Beta')) === ['Beta', 'Mockery\\MockInterface'], 'Each factory must filter targets against its own codebase.');
+    $check($targets($factory($otherCodebase, 'GammaTrait')) === ['GammaTrait', 'Mockery\\MockInterface'], 'Trait targets must resolve to Trait&MockInterface.');
 
     for ($index = 0; $index < 600; ++$index) {
         $name = 'Generated' . $index;

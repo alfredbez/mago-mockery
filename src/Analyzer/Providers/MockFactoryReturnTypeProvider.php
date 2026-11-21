@@ -26,12 +26,18 @@ final class MockFactoryReturnTypeProvider implements MethodReturnTypeProvider
             MethodTarget::exact('Mockery', 'spy'),
             MethodTarget::exact('Mockery', 'namedMock'),
             MethodTarget::exact('Mockery', 'instanceMock'),
+            MethodTarget::exact('Mockery', 'fetchMock'),
             MethodTarget::exact('Mockery\\Container', 'mock'),
+            MethodTarget::exact('Mockery\\Container', 'fetchMock'),
         ];
     }
 
     public function getReturnType(ReturnTypeProviderContext $context): ?Type
     {
+        if (strtolower($context->invocation->name) === 'fetchmock') {
+            return MockTypeFactory::fromFetchMock($context->invocation, $context->codebase);
+        }
+
         return MockTypeFactory::fromInvocation($context->invocation, $context->codebase);
     }
 }

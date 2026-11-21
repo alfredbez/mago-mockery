@@ -4,6 +4,8 @@ declare(strict_types=1);
 
 chdir(dirname(__DIR__));
 
+require __DIR__ . '/check-providers.php';
+
 $failures = 0;
 
 $version = trim(run([PHP_BINARY, 'vendor/bin/mago', '--version'])['stdout']);

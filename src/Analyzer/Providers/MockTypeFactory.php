@@ -20,6 +20,11 @@ final class MockTypeFactory
 {
     public const MOCK_INTERFACE = 'Mockery\\MockInterface';
 
+    private const MAX_CACHED_TYPES = 256;
+
+    /** @var array<string, Type> */
+    private static array $types = [];
+
     private const IGNORED_OBJECT_TYPES = [
         'closure' => true,
         'mockery\\generator\\mockconfigurationbuilder' => true,
@@ -173,6 +178,15 @@ final class MockTypeFactory
      */
     private static function createMultiple(array $mockedClasses): Type
     {
+        $key = implode("\0", $mockedClasses);
+        if (isset(self::$types[$key])) {
+            return self::$types[$key];
+        }
+
+        if (count(self::$types) >= self::MAX_CACHED_TYPES) {
+            self::$types = [];
+        }
+
         $primary = array_shift($mockedClasses);
         $intersections = [];
         foreach ($mockedClasses as $extra) {
@@ -180,7 +194,7 @@ final class MockTypeFactory
         }
         $intersections[] = new NamedObjectType(self::MOCK_INTERFACE, null, null, false, false, null, false);
 
-        return Type::fromAtomic(new NamedObjectType(
+        return self::$types[$key] = Type::fromAtomic(new NamedObjectType(
             name: $primary,
             parameters: null,
             variances: null,

@@ -20,24 +20,42 @@ final class MockTypeFactory
 {
     public const MOCK_INTERFACE = 'Mockery\\MockInterface';
 
+    private const IGNORED_OBJECT_TYPES = [
+        'closure' => true,
+        'mockery\\generator\\mockconfigurationbuilder' => true,
+        'mockery\\legacymockinterface' => true,
+        'mockery\\mockinterface' => true,
+    ];
+
     private function __construct() {}
 
     /**
-     * The mocked classes are class-string arguments for mock()/spy(), and start at
-     * index 1 for namedMock(), where argument 0 is the mock name.
+     * Extracts mocked class/interface targets from mock()/spy()/namedMock()/instanceMock() arguments.
+     *
+     * Supports class-strings, Mockery string specs (`alias:`, `overload:`, `Foo[m1, m2]`,
+     * comma-separated interface lists, pipe-separated specs), and concrete object partial mocks.
+     * For namedMock(), argument 0 is the generated mock class name and is skipped.
      */
     public static function fromInvocation(Invocation $invocation, Codebase $codebase): ?Type
     {
         $startIndex = strtolower($invocation->name) === 'namedmock' ? 1 : 0;
         $classes = [];
         foreach ($invocation->arguments as $index => $argument) {
-            if ($index < $startIndex) {
+            if ($index < $startIndex || $argument->type === null) {
                 continue;
             }
 
-            $class = $argument->type?->getLiteralClassString();
-            if ($class !== null && $codebase->classOrInterfaceExists($class)) {
-                $classes[$class] = true;
+            $literal = $argument->type->getLiteralString();
+            if ($literal !== null) {
+                foreach (self::extractClassesFromSpec($literal) as $candidate) {
+                    self::addTargetIfValid($candidate, $codebase, $classes);
+                }
+
+                continue;
+            }
+
+            foreach (self::extractObjectTargets($argument->type) as $candidate) {
+                self::addTargetIfValid($candidate, $codebase, $classes);
             }
         }
 
@@ -45,16 +63,109 @@ final class MockTypeFactory
             return null;
         }
 
-        return self::createMultiple(array_keys($classes));
+        return self::createMultiple(array_values($classes));
     }
 
-    public static function create(string $mocked, Codebase $codebase): ?Type
+    /**
+     * @return list<string>
+     */
+    private static function extractClassesFromSpec(string $spec): array
     {
-        if (!$codebase->classOrInterfaceExists($mocked)) {
-            return null;
+        $names = [];
+        foreach (explode('|', $spec) as $part) {
+            $part = trim($part);
+            if ($part === '' || $part === 'null') {
+                continue;
+            }
+
+            if (str_contains($part, ',') && !str_contains($part, ']')) {
+                foreach (explode(',', $part) as $item) {
+                    $candidate = ltrim(trim($item), '\\');
+                    if ($candidate !== '') {
+                        $names[] = $candidate;
+                    }
+                }
+
+                continue;
+            }
+
+            if (str_starts_with($part, 'alias:')) {
+                $candidate = ltrim(substr($part, 6), '\\');
+                if ($candidate !== '') {
+                    $names[] = $candidate;
+                }
+
+                continue;
+            }
+
+            if (str_starts_with($part, 'overload:')) {
+                $candidate = ltrim(substr($part, 9), '\\');
+                if ($candidate !== '') {
+                    $names[] = $candidate;
+                }
+
+                continue;
+            }
+
+            if (str_ends_with($part, ']') && str_contains($part, '[')) {
+                $candidate = ltrim(explode('[', $part, 2)[0], '\\');
+                if ($candidate !== '') {
+                    $names[] = $candidate;
+                }
+
+                continue;
+            }
+
+            $candidate = ltrim($part, '\\');
+            if ($candidate !== '') {
+                $names[] = $candidate;
+            }
         }
 
-        return self::createMultiple([$mocked]);
+        return $names;
+    }
+
+    /**
+     * @return list<string>
+     */
+    private static function extractObjectTargets(Type $type): array
+    {
+        if (count($type->atomicTypes) !== 1) {
+            return [];
+        }
+
+        $atomic = $type->atomicTypes[0];
+        if (!$atomic instanceof NamedObjectType) {
+            return [];
+        }
+
+        if (isset(self::IGNORED_OBJECT_TYPES[strtolower($atomic->name)])) {
+            return [];
+        }
+
+        $targets = [$atomic->name];
+        foreach ($atomic->intersections ?? [] as $intersection) {
+            if ($intersection instanceof NamedObjectType) {
+                $targets[] = $intersection->name;
+            }
+        }
+
+        return $targets;
+    }
+
+    /**
+     * @param array<string, string> $classes
+     */
+    private static function addTargetIfValid(string $candidate, Codebase $codebase, array &$classes): void
+    {
+        $lower = strtolower($candidate);
+        if (isset(self::IGNORED_OBJECT_TYPES[$lower]) || isset($classes[$lower])) {
+            return;
+        }
+
+        if ($codebase->classOrInterfaceExists($candidate)) {
+            $classes[$lower] = $candidate;
+        }
     }
 
     /**

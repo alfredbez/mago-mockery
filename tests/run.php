@@ -30,18 +30,19 @@ fwrite(STDOUT, "\n");
 $expected = [
     false => [
         'tests/fixtures/ExpectationChains.php' => [],
+        'tests/fixtures/MockSpecs.php' => [],
         'tests/fixtures/Positive.php' => [],
         'tests/fixtures/IntersectionControl.php' => [
             'invalid-argument' => 1,
         ],
         'tests/fixtures/Negative.php' => [
-            // unknown methods on mock, after getMock(), after fluent builders, after higher-order getMock(),
+            // unknown methods on mocks, string specs, object partial, after getMock()/fluent builders/higher-order,
             // plus Expectation method `andReturn` called on VerificationDirector
-            'non-existent-method' => 6,
+            'non-existent-method' => 9,
             // totallyFakeExpectationMethod on CompositeExpectation
             'non-documented-method' => 1,
-            // Greeter mock passed where an ApiClient is expected + times('not-an-int')
-            'invalid-argument' => 2,
+            // Greeter mock & overload:Greeter mock passed where an ApiClient is expected + times('not-an-int')
+            'invalid-argument' => 3,
             // chaining after void returns: CompositeExpectation::add(), shouldNotHaveReceived('name'),
             // shouldNotHaveBeenCalled(), and higher-order shouldNotHaveReceived()->greet()
             'invalid-method-access' => 4,
@@ -61,6 +62,11 @@ $expected = [
             'possible-method-access-on-null' => 1,
             'too-few-arguments' => 2,
         ],
+        'tests/fixtures/MockSpecs.php' => [
+            'invalid-argument' => 7,
+            'non-existent-method' => 14,
+            'possibly-invalid-argument' => 1,
+        ],
         'tests/fixtures/Positive.php' => [
             'non-existent-method' => 7,
             'possibly-invalid-argument' => 1,
@@ -70,11 +76,11 @@ $expected = [
             'invalid-argument' => 1,
         ],
         'tests/fixtures/Negative.php' => [
-            'invalid-argument' => 2,
+            'invalid-argument' => 3,
             'invalid-method-access' => 2,
             'mixed-method-access' => 1,
             'non-documented-method' => 8,
-            'non-existent-method' => 12,
+            'non-existent-method' => 15,
             'possible-method-access-on-null' => 1,
             'possibly-invalid-argument' => 1,
             'too-few-arguments' => 2,
@@ -132,6 +138,30 @@ $failures += assertMessageCount(
     'tests/fixtures/Negative.php',
     'invalid-argument',
     'found `MockeryFixture\\Greeter&Mockery\\MockInterface`',
+    2,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/Negative.php',
+    'non-existent-method',
+    'Method `missingOnPartialSpec` does not exist on type `MockeryFixture\\ApiClient`',
+    1,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/Negative.php',
+    'non-existent-method',
+    'Method `missingOnObjectPartial` does not exist on type `MockeryFixture\\GreeterImpl`',
+    1,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/Negative.php',
+    'non-existent-method',
+    'Method `missingOnUnknownOverload` does not exist on type `Mockery\\MockInterface`',
     1,
 );
 $failures += assertMessageCount(

@@ -114,6 +114,17 @@ final class Negative extends Support
     }
 
     /**
+     * String specs and object partial mocks still reject unknown methods and wrong types.
+     */
+    public function invalidUsageOnStringSpecsAndObjectMocks(): void
+    {
+        $this->acceptApiClient(Mockery::mock('overload:' . Greeter::class));
+        Mockery::mock(ApiClient::class . '[fetch]')->missingOnPartialSpec();
+        Mockery::mock(new GreeterImpl())->missingOnObjectPartial();
+        Mockery::mock('overload:MockeryFixture\\NonExistentClass')->missingOnUnknownOverload();
+    }
+
+    /**
      * KNOWN GAP (Mago 1.60.2): an extension-supplied intersection compared
      * against an intersection parameter is accepted. This call must report
      * "argument #1 expects Greeter&MockInterface, found ApiClient&MockInterface"

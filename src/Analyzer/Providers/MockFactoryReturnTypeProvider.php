@@ -25,6 +25,7 @@ final class MockFactoryReturnTypeProvider implements MethodReturnTypeProvider
             MethodTarget::exact('Mockery', 'mock'),
             MethodTarget::exact('Mockery', 'spy'),
             MethodTarget::exact('Mockery', 'namedMock'),
+            MethodTarget::exact('Mockery', 'instanceMock'),
             MethodTarget::exact('Mockery\\Container', 'mock'),
         ];
     }

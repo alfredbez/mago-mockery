@@ -1,0 +1,15 @@
+version = "1"
+php-version = "8.3"
+
+[source]
+paths = ["tests/phpunit-fixtures"]
+includes = ["vendor/mockery/mockery/library", "vendor/phpunit/phpunit/src"]
+
+[analyzer]
+find-unused-definitions = true
+find-unused-expressions = false
+check-property-initialization = true
+
+[extension-hosts.mockery]
+command = ["php", "worker.php"]
+workers = 1

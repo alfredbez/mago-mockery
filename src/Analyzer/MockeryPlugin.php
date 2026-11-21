@@ -7,10 +7,12 @@ namespace AlfredBez\MagoMockery\Analyzer;
 use AlfredBez\MagoMockery\Analyzer\Providers\CompositeExpectationProvider;
 use AlfredBez\MagoMockery\Analyzer\Providers\ExpectationAndMatcherSignatureProvider;
 use AlfredBez\MagoMockery\Analyzer\Providers\HigherOrderMessageProvider;
+use AlfredBez\MagoMockery\Analyzer\Providers\MockeryPhpUnitInitializer;
 use AlfredBez\MagoMockery\Analyzer\Providers\MockFactoryReturnTypeProvider;
 use AlfredBez\MagoMockery\Analyzer\Providers\MockHelperFunctionReturnTypeProvider;
 use AlfredBez\MagoMockery\Analyzer\Providers\NoArgumentFactoryProvider;
 use AlfredBez\MagoMockery\Analyzer\Providers\VerificationProvider;
+use Mago\Sdk\Analyzer\MethodTarget;
 use Mago\Sdk\Analyzer\Plugin;
 use Mago\Sdk\Analyzer\PluginDefinition;
 use Mago\Sdk\Analyzer\PluginRegistry;
@@ -37,5 +39,11 @@ final class MockeryPlugin implements Plugin
         $registry->registerMethodReturnTypeProvider(new ExpectationAndMatcherSignatureProvider());
         $registry->registerMethodReturnTypeProvider(new VerificationProvider());
         $registry->registerMethodReturnTypeProvider(new HigherOrderMessageProvider());
+        $registry->registerClassInitializerProvider(new MockeryPhpUnitInitializer());
+        $registry->registerEntryPoint(MethodTarget::exact('Mockery\\Adapter\\Phpunit\\MockeryTestCase', 'mockeryTestSetUp'));
+        $registry->registerEntryPoint(MethodTarget::exact('Mockery\\Adapter\\Phpunit\\MockeryTestCase', 'mockeryTestTearDown'));
+        $registry->registerEntryPoint(MethodTarget::exact('PHPUnit\\Framework\\TestCase', 'mockeryAssertPostConditions'));
+        $registry->registerEntryPoint(MethodTarget::exact('PHPUnit\\Framework\\TestCase', 'startMockery'));
+        $registry->registerEntryPoint(MethodTarget::exact('PHPUnit\\Framework\\TestCase', 'purgeMockeryContainer'));
     }
 }

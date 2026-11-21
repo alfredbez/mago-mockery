@@ -286,6 +286,37 @@ $failures += assertMessageCount(
     0,
 );
 
+$phpunitWith = analyze(false, 'tests/phpunit-integration.toml');
+$phpunitWithout = analyze(true, 'tests/phpunit-integration.toml');
+$failures += assertHistograms('phpunit with extension', $phpunitWith, [
+    'tests/phpunit-fixtures/PhpUnitIntegration.php' => [
+        // UninitializedPropertyNegativeFixture::$neverInitialized + PlainPhpUnitControlFixture::$initializedInSetUpOnly
+        'uninitialized-property' => 2,
+    ],
+]);
+$failures += assertHistograms('phpunit --no-extensions', $phpunitWithout, [
+    'tests/phpunit-fixtures/PhpUnitIntegration.php' => [
+        'invalid-property-assignment-value' => 3,
+        'uninitialized-property' => 5,
+    ],
+]);
+$failures += assertMessageCount(
+    'phpunit with extension',
+    $phpunitWith,
+    'tests/phpunit-fixtures/PhpUnitIntegration.php',
+    'uninitialized-property',
+    'neverInitialized',
+    1,
+);
+$failures += assertMessageCount(
+    'phpunit with extension',
+    $phpunitWith,
+    'tests/phpunit-fixtures/PhpUnitIntegration.php',
+    'uninitialized-property',
+    'initializedInSetUpOnly',
+    1,
+);
+
 if ($failures > 0) {
     fwrite(STDERR, "\n{$failures} assertion(s) failed\n");
     exit(1);
@@ -296,11 +327,13 @@ exit(0);
 
 /**
  * @param list<string> $command
+ * @param array<string, string>|null $env
  * @return array{exit: int, stdout: string, stderr: string}
  */
-function run(array $command): array
+function run(array $command, ?array $env = null): array
 {
-    $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes);
+    $environment = $env === null ? null : array_merge($_ENV, getenv(), $env);
+    $process = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, null, $environment);
     if ($process === false) {
         fwrite(STDERR, 'failed to start ' . implode(' ', $command) . "\n");
         exit(1);
@@ -318,15 +351,24 @@ function run(array $command): array
     ];
 }
 
-/** @return list<array{level: string, code: string, file: string, line: int, message: string}> */
-function analyze(bool $noExtensions): array
+/**
+ * @param array<string, string>|null $env
+ * @return list<array{level: string, code: string, file: string, line: int, message: string}>
+ */
+function analyze(bool $noExtensions, ?string $config = null, ?array $env = null): array
 {
-    $command = [PHP_BINARY, 'vendor/bin/mago', 'analyze', '--reporting-format=json'];
+    $command = [PHP_BINARY, 'vendor/bin/mago'];
+    if ($config !== null) {
+        $command[] = '--config';
+        $command[] = $config;
+    }
+    $command[] = 'analyze';
+    $command[] = '--reporting-format=json';
     if ($noExtensions) {
         $command[] = '--no-extensions';
     }
 
-    $result = run($command);
+    $result = run($command, $env);
     if (trim($result['stderr']) !== '') {
         fwrite(STDERR, ($noExtensions ? '--no-extensions' : 'with extension') . " stderr:\n" . $result['stderr'] . "\n");
     }

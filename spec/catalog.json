@@ -45,6 +45,21 @@
       "url": "https://github.com/mockery/mockery/blob/967a801bd188989a5669bd280f252d51c0fdc9ee/library/Mockery/HigherOrderMessage.php",
       "kind": "runtime-source",
       "scope": "Mockery 1.6.15 HigherOrderMessage::__call() forwarding for expectations and verification"
+    },
+    "mockery-expectation": {
+      "url": "https://github.com/mockery/mockery/blob/967a801bd188989a5669bd280f252d51c0fdc9ee/library/Mockery/Expectation.php",
+      "kind": "runtime-source",
+      "scope": "Mockery 1.6.15 Expectation builder signatures (andReturnUsing, andReturnValues, andReturnSelf, andReturnArg, andSet, withArgs, withSomeOfArgs)"
+    },
+    "mockery-matchers": {
+      "url": "https://github.com/mockery/mockery/blob/967a801bd188989a5669bd280f252d51c0fdc9ee/library/Mockery.php",
+      "kind": "runtime-source",
+      "scope": "Mockery 1.6.15 static matcher factories (on, capture, subset, type, pattern, ducktype, hasKey, hasValue, any, mustBe, contains)"
+    },
+    "mockery-phpunit": {
+      "url": "https://github.com/mockery/mockery/blob/967a801bd188989a5669bd280f252d51c0fdc9ee/library/Mockery/Adapter/Phpunit/MockeryPHPUnitIntegration.php",
+      "kind": "runtime-source",
+      "scope": "Mockery 1.6.15 MockeryPHPUnitIntegration trait and MockeryTestCase lifecycle hooks"
     }
   },
   "cases": [
@@ -71,7 +86,7 @@
       "negative_control": "Disabling extensions loses all target interfaces and produces non-existent-method and invalid-argument diagnostics on MockSpecs.php.",
       "priority": "P0",
       "versions": "Verified on PHP 8.4, Mockery 1.6.15, Mago 1.60.2.",
-      "coverage": ["tests/fixtures/MockSpecs.php", "tests/fixtures/Positive.php", "tests/run.php"],
+      "coverage": ["tests/fixtures/MockSpecs.php", "tests/fixtures/Positive.php", "tests/runtime/MockSpecsRuntimeTest.php", "tests/run.php"],
       "status": "covered"
     },
     {
@@ -83,8 +98,8 @@
       "analyzer_expectation": "Infer Target&MockInterface when Target exists in the codebase; fall back to MockInterface when Target does not exist.",
       "negative_control": "Passing Mockery::mock('overload:' . Greeter::class) into acceptApiClient() reports invalid-argument with Greeter&MockInterface; unknown class overload falls back to MockInterface.",
       "priority": "P0",
-      "versions": "Verified on PHP 8.4, Mockery 1.6.15, Mago 1.60.2.",
-      "coverage": ["tests/fixtures/MockSpecs.php", "tests/fixtures/Negative.php", "tests/run.php"],
+      "versions": "Verified on PHP 8.3/8.4, Mockery 1.6.15, Mago 1.60.2.",
+      "coverage": ["tests/fixtures/MockSpecs.php", "tests/fixtures/Negative.php", "tests/runtime/MockSpecsRuntimeTest.php", "tests/run.php"],
       "status": "covered"
     },
     {
@@ -96,8 +111,8 @@
       "analyzer_expectation": "Infer Target&MockInterface for Foo[m1, m2] and Foo[!m1] specs when Target exists.",
       "negative_control": "Calling an unknown method on Mockery::mock(ApiClient::class . '[fetch]') reports non-existent-method on ApiClient.",
       "priority": "P0",
-      "versions": "Verified on PHP 8.4, Mockery 1.6.15, Mago 1.60.2.",
-      "coverage": ["tests/fixtures/MockSpecs.php", "tests/fixtures/Negative.php", "tests/run.php"],
+      "versions": "Verified on PHP 8.3/8.4, Mockery 1.6.15, Mago 1.60.2.",
+      "coverage": ["tests/fixtures/MockSpecs.php", "tests/fixtures/Negative.php", "tests/runtime/MockSpecsRuntimeTest.php", "tests/run.php"],
       "status": "covered"
     },
     {
@@ -109,8 +124,8 @@
       "analyzer_expectation": "Infer ClassName&MockInterface for concrete object arguments while ignoring Closure and MockConfigurationBuilder.",
       "negative_control": "Calling an unknown method on Mockery::mock(new GreeterImpl()) reports non-existent-method on GreeterImpl.",
       "priority": "P1",
-      "versions": "Verified on PHP 8.4, Mockery 1.6.15, Mago 1.60.2.",
-      "coverage": ["tests/fixtures/MockSpecs.php", "tests/fixtures/Negative.php", "tests/run.php"],
+      "versions": "Verified on PHP 8.3/8.4, Mockery 1.6.15, Mago 1.60.2.",
+      "coverage": ["tests/fixtures/MockSpecs.php", "tests/fixtures/Negative.php", "tests/runtime/MockSpecsRuntimeTest.php", "tests/run.php"],
       "status": "covered"
     },
     {
@@ -175,7 +190,46 @@
       "negative_control": "Chaining ->withAnyArgs() on shouldNotHaveReceived('countGreetings'), ->once() on shouldNotHaveBeenCalled(), and ->once() on shouldNotHaveReceived()->greet('x') all report invalid-method-access on void.",
       "priority": "P0",
       "versions": "Runtime-verified on Mockery 1.6.15 and Mago 1.60.2.",
-      "coverage": ["tests/fixtures/ExpectationChains.php", "tests/fixtures/Negative.php", "tests/run.php"],
+      "coverage": ["tests/fixtures/ExpectationChains.php", "tests/fixtures/Negative.php", "tests/runtime/ExpectationsAndVerificationRuntimeTest.php", "tests/run.php"],
+      "status": "covered"
+    },
+    {
+      "id": "MOCKERY-E004",
+      "title": "Expectation and VerificationDirector parameter signatures match runtime rules",
+      "sources": ["mockery-expectation", "mockery-composite"],
+      "fixture": "<?php interface Greeter { public function greet(string $n): string; } $g = Mockery::mock(Greeter::class); $g->shouldReceive('greet')->andReturnUsing(static fn (string $n): string => $n)->andReturnValues(['a'])->andReturnSelf()->andReturnArg(0)->andSet('p', 'a', 'b')->withArgs(['x'])->withSomeOfArgs('x');",
+      "semantics": "Expectation::andReturnArg() rejects negative indexes, Expectation::andSet() accepts variadic mixed values, and VerificationDirector::withArgs() accepts only array or Closure.",
+      "analyzer_expectation": "Accept valid calls on CompositeExpectation, Expectation, and VerificationDirector while reporting invalid-argument on negative andReturnArg() indexes, non-array/non-Closure withArgs(), and non-array andReturnValues().",
+      "negative_control": "Negative.php verifies invalid-argument diagnostics for andReturnArg(-1), andReturnValues('not-an-array'), and withArgs(123) on CompositeExpectation, Expectation, and VerificationDirector.",
+      "priority": "P1",
+      "versions": "Runtime-verified on PHP 8.3, Mockery 1.6.15, Mago 1.60.2.",
+      "coverage": ["tests/fixtures/ExpectationChains.php", "tests/fixtures/Negative.php", "tests/runtime/ExpectationsAndVerificationRuntimeTest.php", "tests/run.php"],
+      "status": "covered"
+    },
+    {
+      "id": "MOCKERY-A001",
+      "title": "Argument matcher factory parameter types and concrete matcher return types",
+      "sources": ["phpstan-bar-test", "mockery-matchers"],
+      "fixture": "<?php $on = Mockery::on(static fn (string $s): bool => $s !== ''); $sub = Mockery::subset(['a' => 1]); $typ = Mockery::type('string'); $key = Mockery::hasKey('a');",
+      "semantics": "Mockery::on(), capture(), subset(), type(), pattern(), ducktype(), hasKey(), hasValue(), any(), mustBe(), and contains() return concrete Mockery\\Matcher\\* classes and require string/array-key inputs where enforced at runtime.",
+      "analyzer_expectation": "Preserve concrete Mockery\\Matcher\\* return types and reject non-Closure arguments to on(), non-array arguments to subset(), non-string arguments to type()/pattern()/ducktype(), and non-array-key arguments to hasKey().",
+      "negative_control": "Negative.php asserts invalid-argument diagnostics on Mockery::on('not-a-closure'), subset('not-an-array'), type(123), pattern(123), ducktype(123), and hasKey([]).",
+      "priority": "P1",
+      "versions": "Runtime-verified on PHP 8.3, Mockery 1.6.15, Mago 1.60.2.",
+      "coverage": ["tests/fixtures/ExpectationChains.php", "tests/fixtures/Negative.php", "tests/runtime/ExpectationsAndVerificationRuntimeTest.php", "tests/run.php"],
+      "status": "covered"
+    },
+    {
+      "id": "MOCKERY-P001",
+      "title": "PHPUnit integration initializes properties in MockeryTestCase and MockeryPHPUnitIntegration",
+      "sources": ["mockery-phpunit"],
+      "fixture": "<?php use Mockery\\Adapter\\Phpunit\\MockeryTestCase; final class ExampleTest extends MockeryTestCase { private string $v; protected function mockeryTestSetUp(): void { $this->v = 'ok'; } public function testIt(): void { self::assertSame('ok', $this->v); } }",
+      "semantics": "MockeryTestCase runs mockeryTestSetUp() from setUp() and MockeryPHPUnitIntegration runs startMockery(), mockeryAssertPostConditions(), and purgeMockeryContainer() around every test.",
+      "analyzer_expectation": "Treat startMockery(), setUp(), and mockeryTestSetUp() as class initializers on MockeryTestCase subclasses and TestCase classes using MockeryPHPUnitIntegration, and register Mockery lifecycle hooks as entry points.",
+      "negative_control": "Uninitialized properties on MockeryTestCase subclasses and plain non-Mockery TestCase controls still report uninitialized-property.",
+      "priority": "P1",
+      "versions": "Runtime-verified on PHP 8.3, PHPUnit 12.5, Mockery 1.6.15, Mago 1.60.2.",
+      "coverage": ["tests/phpunit-fixtures/PhpUnitIntegration.php", "tests/phpunit-integration.toml", "tests/runtime/MockeryTestCaseLifecycleRuntimeTest.php", "tests/runtime/PhpUnitIntegrationRuntimeTest.php", "tests/run.php"],
       "status": "covered"
     },
     {
@@ -184,25 +238,25 @@
       "sources": ["phpstan-mockery-test"],
       "fixture": "<?php interface Greeter {} final class ApiClient {} function take(Greeter&Mockery\\MockInterface $g): void {} take(Mockery::mock(ApiClient::class));",
       "semantics": "An ApiClient&MockInterface mock does not satisfy a Greeter&MockInterface parameter.",
-      "analyzer_expectation": "Report invalid-argument when passing ApiClient&MockInterface to Greeter&MockInterface. Currently a known upstream Mago 1.60.2 limitation tracked in Negative.php and tests/run.php.",
+      "analyzer_expectation": "Report invalid-argument when passing ApiClient&MockInterface to Greeter&MockInterface. Confirmed still an upstream Mago 1.60.2 limitation tracked in Negative.php and tests/run.php.",
       "negative_control": "IntersectionControl.php confirms plain PHP intersection checking is unaffected; Negative.php pins the known gap count (0) so an upstream Mago fix surfaces immediately.",
       "priority": "P1",
-      "versions": "Tracked as known gap on Mago 1.60.2.",
+      "versions": "Confirmed known upstream gap on Mago 1.60.2.",
       "coverage": ["tests/fixtures/Negative.php", "tests/fixtures/IntersectionControl.php", "tests/run.php"],
       "status": "candidate"
     },
     {
       "id": "MOCKERY-G002",
-      "title": "Validate mocked method names against the target class",
+      "title": "Opt-in validation of mocked method names against the target class",
       "sources": ["mockery-mock"],
       "fixture": "<?php interface Greeter { public function greet(string $n): string; } Mockery::mock(Greeter::class)->shouldReceive('doesNotExist');",
       "semantics": "When Mockery's allowMockingNonExistentMethods is disabled, mocking a non-existent method fails at runtime.",
-      "analyzer_expectation": "Optional future rule or diagnostic checking literal method names passed to shouldReceive()/allows()/expects() or HigherOrderMessage against the mocked class's methods.",
-      "negative_control": "Mockery allows mocking non-existent methods by default and via shouldAllowMockingMethod(), so any future check must be opt-in or respect configuration.",
+      "analyzer_expectation": "When MAGO_MOCKERY_STRICT_METHODS=1 is set, report alfredbez/mockery/unknown-mocked-method for literal method names (and Demeter chain roots or map keys) missing from the mocked target class, while skipping __call/__callStatic/@method classes, dynamic names, and anonymous mocks.",
+      "negative_control": "Default mode (unset MAGO_MOCKERY_STRICT_METHODS) registers no hook and reports zero issues; strict mode stays silent on valid methods, __call classes, @method pseudo-methods, dynamic method names, and anonymous mocks.",
       "priority": "P2",
-      "versions": "Not implemented; documented as known boundary.",
-      "coverage": [],
-      "status": "candidate"
+      "versions": "Runtime-verified on PHP 8.3, Mockery 1.6.15, Mago 1.60.2.",
+      "coverage": ["tests/strict-fixtures/StrictMethods.php", "tests/strict-methods.toml", "tests/runtime/ExpectationsAndVerificationRuntimeTest.php", "tests/run.php"],
+      "status": "covered"
     }
   ]
 }

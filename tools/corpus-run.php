@@ -4,21 +4,28 @@ declare(strict_types=1);
 
 /**
  * Runs Mago with and without the Mockery extension against pinned OSS corpora
- * (mockery/mockery and laravel/framework test suites) and computes exact
- * diagnostic diffs, overhead ratios, and crash checks.
+ * (mockery/mockery and laravel/framework test suites) and enforces per-code
+ * snapshot baselines, overhead reporting, and crash checks.
  *
  * Usage:
- *   php tools/corpus-run.php [--cache=/path/to/cache] [--target=name] [--json=/path/out.json] [--check]
+ *   php tools/corpus-run.php [--cache=/path/to/cache] [--target=name[,name]] [--json=/path/out.json] [--baseline=/path/baseline.json] [--check] [--update-baseline] [--strict-methods] [--no-clone]
  */
 
 $repoRoot = dirname(__DIR__);
-$options = getopt('', ['cache::', 'target::', 'json::', 'check', 'no-clone']);
+$options = getopt('', ['cache::', 'target::', 'json::', 'baseline::', 'check', 'update-baseline', 'strict-methods', 'no-clone']);
 $cacheDir = is_string($options['cache'] ?? null) && $options['cache'] !== ''
     ? rtrim($options['cache'], '/')
     : $repoRoot . '/.corpus-cache';
-$filterTarget = is_string($options['target'] ?? null) ? $options['target'] : null;
+$filterTargets = is_string($options['target'] ?? null) && $options['target'] !== '' && $options['target'] !== 'all'
+    ? array_values(array_filter(array_map('trim', explode(',', $options['target'])), static fn (string $v): bool => $v !== ''))
+    : null;
 $jsonOut = is_string($options['json'] ?? null) ? $options['json'] : null;
+$baselinePath = is_string($options['baseline'] ?? null) && $options['baseline'] !== ''
+    ? $options['baseline']
+    : $repoRoot . '/tools/corpus-baseline.json';
 $checkGate = isset($options['check']);
+$updateBaseline = isset($options['update-baseline']);
+$strictMethods = isset($options['strict-methods']);
 $noClone = isset($options['no-clone']);
 
 $magoBin = getenv('MAGO_BIN');
@@ -33,7 +40,6 @@ $targets = [
         'php_version' => '8.3',
         'paths' => ['tests/Unit'],
         'includes' => ['library', 'tests/Fixture', 'vendor'],
-        'max_net_regression' => 0,
     ],
     'laravel' => [
         'repo' => 'https://github.com/laravel/framework.git',
@@ -41,9 +47,25 @@ $targets = [
         'php_version' => '8.3',
         'paths' => ['tests/Cache', 'tests/Queue', 'tests/Events', 'tests/Mail'],
         'includes' => ['src', 'vendor'],
-        'max_net_regression' => 0,
     ],
 ];
+
+if ($filterTargets !== null) {
+    foreach ($filterTargets as $wanted) {
+        if (!isset($targets[$wanted])) {
+            fwrite(STDERR, "Unknown target: {$wanted}\n");
+            exit(1);
+        }
+    }
+}
+
+$baselineData = ['schema_version' => 1, 'targets' => []];
+if (is_file($baselinePath)) {
+    $decodedBaseline = json_decode((string) file_get_contents($baselinePath), true);
+    if (is_array($decodedBaseline) && isset($decodedBaseline['targets']) && is_array($decodedBaseline['targets'])) {
+        $baselineData = $decodedBaseline;
+    }
+}
 
 if (!is_dir($cacheDir)) {
     mkdir($cacheDir, 0777, true);
@@ -53,7 +75,7 @@ $results = [];
 $failures = 0;
 
 foreach ($targets as $name => $spec) {
-    if ($filterTarget !== null && $filterTarget !== $name) {
+    if ($filterTargets !== null && !in_array($name, $filterTargets, true)) {
         continue;
     }
 
@@ -108,9 +130,10 @@ workers = 1
 TOML;
     file_put_contents($tomlPath, $toml);
 
+    $env = $strictMethods ? ['MAGO_MOCKERY_STRICT_METHODS' => '1'] : [];
     try {
-        $with = runAnalyze($magoCommand, $tomlPath, $dir, false);
-        $without = runAnalyze($magoCommand, $tomlPath, $dir, true);
+        $with = runAnalyze($magoCommand, $tomlPath, $dir, false, $env);
+        $without = runAnalyze($magoCommand, $tomlPath, $dir, true, $env);
     } finally {
         @unlink($tomlPath);
     }
@@ -123,6 +146,7 @@ TOML;
     $entry = [
         'target' => $name,
         'ref' => $spec['ref'],
+        'strict_methods' => $strictMethods,
         'with_ms' => round($with['ms'], 1),
         'no_ext_ms' => round($without['ms'], 1),
         'overhead_ms' => round($overheadMs, 1),
@@ -136,7 +160,7 @@ TOML;
         'stderr' => trim($with['stderr']),
         'eliminated_by_code' => countByCode($diff['removed']),
         'added_by_code' => countByCode($diff['added']),
-        'added_samples' => array_slice($diff['added'], 0, 25),
+        'added_samples' => array_slice($diff['added'], 0, 50),
     ];
     $results[$name] = $entry;
 
@@ -166,11 +190,55 @@ TOML;
     if ($entry['crashed']) {
         fwrite(STDERR, "FAIL {$name}: extension worker crashed: {$entry['stderr']}\n");
         $failures++;
+        continue;
     }
-    if ($checkGate && $entry['net_delta'] > $spec['max_net_regression']) {
-        fwrite(STDERR, "FAIL {$name}: net issue delta {$entry['net_delta']} exceeded threshold {$spec['max_net_regression']}\n");
-        $failures++;
+
+    $baselineKey = $strictMethods ? $name . ':strict' : $name;
+
+    if ($updateBaseline) {
+        $addedSorted = $entry['added_by_code'];
+        ksort($addedSorted);
+        $eliminatedSorted = $entry['eliminated_by_code'];
+        ksort($eliminatedSorted);
+        $baselineData['targets'][$baselineKey] = [
+            'ref' => $spec['ref'],
+            'eliminated_count' => $entry['eliminated_count'],
+            'eliminated_by_code' => $eliminatedSorted,
+            'added_by_code' => $addedSorted,
+        ];
     }
+
+    if ($checkGate) {
+        $base = $baselineData['targets'][$baselineKey] ?? null;
+        if (!is_array($base)) {
+            fwrite(STDERR, "FAIL {$baselineKey}: no snapshot baseline in {$baselinePath} (run with --update-baseline)\n");
+            $failures++;
+            continue;
+        }
+        if (($base['ref'] ?? null) !== $spec['ref']) {
+            fwrite(STDERR, sprintf("FAIL %s: baseline ref %s does not match target ref %s\n", $baselineKey, (string) ($base['ref'] ?? 'missing'), $spec['ref']));
+            $failures++;
+        }
+        $baseAdded = is_array($base['added_by_code'] ?? null) ? $base['added_by_code'] : [];
+        foreach ($entry['added_by_code'] as $code => $count) {
+            $allowed = (int) ($baseAdded[$code] ?? 0);
+            if ($count > $allowed) {
+                fwrite(STDERR, "FAIL {$baselineKey}: added code {$code} increased from {$allowed} to {$count}\n");
+                $failures++;
+            }
+        }
+        $baseEliminated = (int) ($base['eliminated_count'] ?? 0);
+        if ($entry['eliminated_count'] < $baseEliminated) {
+            fwrite(STDERR, "FAIL {$baselineKey}: eliminated_count dropped from {$baseEliminated} to {$entry['eliminated_count']}\n");
+            $failures++;
+        }
+    }
+}
+
+if ($updateBaseline && $failures === 0) {
+    ksort($baselineData['targets']);
+    file_put_contents($baselinePath, json_encode($baselineData, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES) . "\n");
+    fwrite(STDOUT, "Updated baseline: {$baselinePath}\n");
 }
 
 if ($jsonOut !== null) {
@@ -181,11 +249,13 @@ exit($failures === 0 ? 0 : 1);
 
 /**
  * @param list<string> $command
+ * @param array<string, string> $extraEnv
  * @return array{exit: int, stdout: string, stderr: string}
  */
-function runCmd(array $command, string $cwd): array
+function runCmd(array $command, string $cwd, array $extraEnv = []): array
 {
-    $p = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $cwd);
+    $env = $extraEnv !== [] ? array_merge(getenv(), $extraEnv) : null;
+    $p = proc_open($command, [1 => ['pipe', 'w'], 2 => ['pipe', 'w']], $pipes, $cwd, $env);
     if ($p === false) {
         return ['exit' => 1, 'stdout' => '', 'stderr' => 'proc_open failed'];
     }
@@ -199,9 +269,10 @@ function runCmd(array $command, string $cwd): array
 
 /**
  * @param list<string> $magoCommand
+ * @param array<string, string> $extraEnv
  * @return array{ms: float, crashed: bool, stderr: string, issues: list<array{code: string, file: string, line: int, message: string}>}
  */
-function runAnalyze(array $magoCommand, string $tomlPath, string $cwd, bool $noExt): array
+function runAnalyze(array $magoCommand, string $tomlPath, string $cwd, bool $noExt, array $extraEnv = []): array
 {
     $cmd = array_merge($magoCommand, ['--config', $tomlPath, '--workspace', $cwd, 'analyze', '--reporting-format=json']);
     if ($noExt) {
@@ -209,7 +280,7 @@ function runAnalyze(array $magoCommand, string $tomlPath, string $cwd, bool $noE
     }
 
     $t0 = hrtime(true);
-    $res = runCmd($cmd, $cwd);
+    $res = runCmd($cmd, $cwd, $extraEnv);
     $ms = (hrtime(true) - $t0) / 1e6;
 
     $crashed = str_contains($res['stderr'], 'External plugin error')

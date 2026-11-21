@@ -4,62 +4,74 @@
     "phpstan-mockery-test": {
       "url": "https://github.com/phpstan/phpstan-mockery/blob/4538f63731159086ea628606757f5a0951e1ad57/tests/Mockery/MockeryTest.php",
       "kind": "analyzer-test",
-      "scope": "mock(), namedMock(), multi-interface comma syntax, constructor args, Foo[method], makePartial(), shouldAllowMockingProtectedMethods(), allows()/expects() higher-order chains"
+      "scope": "mock(), namedMock(), multi-interface comma syntax, constructor args, Foo[method], makePartial(), shouldAllowMockingProtectedMethods(), allows()/expects() higher-order chains",
+      "sha256": "fab6c910fff7fc62d27a9e36fdeb88c5ffc968185824048dd5f5bc127cb8ea60"
     },
     "phpstan-isolated-test": {
       "url": "https://github.com/phpstan/phpstan-mockery/blob/4538f63731159086ea628606757f5a0951e1ad57/tests/Mockery/IsolatedMockeryTest.php",
       "kind": "analyzer-test",
-      "scope": "alias: and overload: string mock prefixes"
+      "scope": "alias: and overload: string mock prefixes",
+      "sha256": "1346ca954e9fd269856ad8520552583974547dac42c9918590971575ec9f1745"
     },
     "phpstan-bar-test": {
       "url": "https://github.com/phpstan/phpstan-mockery/blob/4538f63731159086ea628606757f5a0951e1ad57/tests/Mockery/MockeryBarTest.php",
       "kind": "analyzer-test",
-      "scope": "spy(), shouldReceive(), shouldNotReceive(), shouldHaveReceived(), shouldNotHaveReceived(null), closure argument matchers"
+      "scope": "spy(), shouldReceive(), shouldNotReceive(), shouldHaveReceived(), shouldNotHaveReceived(null), closure argument matchers",
+      "sha256": "a0da14814d170f7e197c16ae71ec737cfd2f1dfd2bbafdda290bd9866246b950"
     },
     "phpstan-different-ns-test": {
       "url": "https://github.com/phpstan/phpstan-mockery/blob/4538f63731159086ea628606757f5a0951e1ad57/tests/Mockery/DifferentNamespaceTest.php",
       "kind": "analyzer-test",
-      "scope": "expects('method')->with()->andReturn() across namespaces"
+      "scope": "expects('method')->with()->andReturn() across namespaces",
+      "sha256": "df2f53b46688a2fbf3d3014ace6a2606d69e2d6bde89875bfc0a9167c3dc3f7f"
     },
     "psalm-mock-return": {
       "url": "https://github.com/psalm/mockery-psalm-plugin/blob/2d482b39de60fdf5b504066eb63b69de74021dc4/tests/acceptance/MockReturn.feature",
       "kind": "analyzer-test",
-      "scope": "Foo[method] partial spec, alias:, overload:, spy(), chained shouldReceive(), allows()/expects() higher-order style"
+      "scope": "Foo[method] partial spec, alias:, overload:, spy(), chained shouldReceive(), allows()/expects() higher-order style",
+      "sha256": "e9e6b885fe8031e6adef2a5cd9ff37707e5cfcd1b17b5c33765130100c4b7b71"
     },
     "mockery-container": {
       "url": "https://github.com/mockery/mockery/blob/967a801bd188989a5669bd280f252d51c0fdc9ee/library/Mockery/Container.php",
       "kind": "runtime-source",
-      "scope": "Mockery 1.6.15 Container::parseArguments() and parseStringArgument() target parsing"
+      "scope": "Mockery 1.6.15 Container::parseArguments() and parseStringArgument() target parsing",
+      "sha256": "b8e2c51db6ee3f640f8aa777cf1f3d1f57011fcb7515da4204c17b1b6de6f37b"
     },
     "mockery-mock": {
       "url": "https://github.com/mockery/mockery/blob/967a801bd188989a5669bd280f252d51c0fdc9ee/library/Mockery/Mock.php",
       "kind": "runtime-source",
-      "scope": "Mockery 1.6.15 allows(), expects(), shouldReceive(), shouldNotReceive(), shouldHaveReceived(), shouldNotHaveReceived(), shouldNotHaveBeenCalled(), fluent builders"
+      "scope": "Mockery 1.6.15 allows(), expects(), shouldReceive(), shouldNotReceive(), shouldHaveReceived(), shouldNotHaveReceived(), shouldNotHaveBeenCalled(), fluent builders",
+      "sha256": "ca7bf90dffbdfa6baaff79e010ae7b578d4ab9f601f21c1502df408f1993be3e"
     },
     "mockery-composite": {
       "url": "https://github.com/mockery/mockery/blob/967a801bd188989a5669bd280f252d51c0fdc9ee/library/Mockery/CompositeExpectation.php",
       "kind": "runtime-source",
-      "scope": "Mockery 1.6.15 CompositeExpectation __call forwarding, add(), getMock(), mock(), shouldReceive()"
+      "scope": "Mockery 1.6.15 CompositeExpectation __call forwarding, add(), getMock(), mock(), shouldReceive()",
+      "sha256": "a72d005414fd1466c23f776a8847c14da0015a754babfbe3e87472fe0636388e"
     },
     "mockery-higher-order": {
       "url": "https://github.com/mockery/mockery/blob/967a801bd188989a5669bd280f252d51c0fdc9ee/library/Mockery/HigherOrderMessage.php",
       "kind": "runtime-source",
-      "scope": "Mockery 1.6.15 HigherOrderMessage::__call() forwarding for expectations and verification"
+      "scope": "Mockery 1.6.15 HigherOrderMessage::__call() forwarding for expectations and verification",
+      "sha256": "6d9c2052fd008e021a80dbd37d428074e5663b3d88b67b598c3e65b511f07baf"
     },
     "mockery-expectation": {
       "url": "https://github.com/mockery/mockery/blob/967a801bd188989a5669bd280f252d51c0fdc9ee/library/Mockery/Expectation.php",
       "kind": "runtime-source",
-      "scope": "Mockery 1.6.15 Expectation builder signatures (andReturnUsing, andReturnValues, andReturnSelf, andReturnArg, andSet, withArgs, withSomeOfArgs)"
+      "scope": "Mockery 1.6.15 Expectation builder signatures (andReturnUsing, andReturnValues, andReturnSelf, andReturnArg, andSet, withArgs, withSomeOfArgs)",
+      "sha256": "fae2a787e55298e9e91c6cae1a11b0e11062ae21098bcbf4e7f9048c183d28d9"
     },
     "mockery-matchers": {
       "url": "https://github.com/mockery/mockery/blob/967a801bd188989a5669bd280f252d51c0fdc9ee/library/Mockery.php",
       "kind": "runtime-source",
-      "scope": "Mockery 1.6.15 static matcher factories (on, capture, subset, type, pattern, ducktype, hasKey, hasValue, any, mustBe, contains)"
+      "scope": "Mockery 1.6.15 static matcher factories (on, capture, subset, type, pattern, ducktype, hasKey, hasValue, any, mustBe, contains)",
+      "sha256": "a415a7ab010bfdbf5947ff168724d5bc13b6dd38c0ed78162af56090928630b1"
     },
     "mockery-phpunit": {
       "url": "https://github.com/mockery/mockery/blob/967a801bd188989a5669bd280f252d51c0fdc9ee/library/Mockery/Adapter/Phpunit/MockeryPHPUnitIntegration.php",
       "kind": "runtime-source",
-      "scope": "Mockery 1.6.15 MockeryPHPUnitIntegration trait and MockeryTestCase lifecycle hooks"
+      "scope": "Mockery 1.6.15 MockeryPHPUnitIntegration trait and MockeryTestCase lifecycle hooks",
+      "sha256": "c07def656b07204161cc5586371e7d69dde6096ed23b1fd27872ebabf6e40f37"
     }
   },
   "cases": [
@@ -270,6 +282,32 @@
       "versions": "Investigated on Mago 1.60.2 / PHP 8.3 against laravel/framework v12.73.0.",
       "coverage": [],
       "status": "candidate"
+    },
+    {
+      "id": "MOCKERY-M006",
+      "title": "Mockery::fetchMock() and Container::fetchMock() return (T&MockInterface)|null and traits resolve as mock targets",
+      "sources": ["mockery-container"],
+      "fixture": "<?php trait Loggable { public function log(string $m): void {} } $t = Mockery::mock(Loggable::class); $t->log('hi'); $f = Mockery::fetchMock(Loggable::class); if ($f !== null) { $f->log('fetched'); }",
+      "semantics": "Container::parseArguments() accepts traits via trait_exists($type, true), and Container::fetchMock($name) returns the registered mock instance for $name or null when absent.",
+      "analyzer_expectation": "Include traits in MockTypeFactory::addTargetIfValid() so Mockery::mock(SomeTrait::class) resolves to SomeTrait&MockInterface, and type Mockery::fetchMock(Foo::class) and Container::fetchMock(Foo::class) as (Foo&MockInterface)|null.",
+      "negative_control": "Calling an unknown method on Mockery::mock(LoggableTrait::class) or after null-checking Mockery::fetchMock(Greeter::class) reports non-existent-method; calling a method on fetchMock() without a null check reports possible-method-access-on-null.",
+      "priority": "P0",
+      "versions": "Runtime-verified on PHP 8.3, Mockery 1.6.15, Mago 1.60.2.",
+      "coverage": ["tests/fixtures/MockSpecs.php", "tests/fixtures/Negative.php", "tests/runtime/MockSpecsRuntimeTest.php", "tests/run.php"],
+      "status": "covered"
+    },
+    {
+      "id": "MOCKERY-A002",
+      "title": "Extended matcher factories (isEqual, isSame, anyOf, notAnyOf, not, andAnyOtherArgs) return concrete Mockery\\Matcher\\* types",
+      "sources": ["mockery-matchers"],
+      "fixture": "<?php $eq = Mockery::isEqual('x'); $same = Mockery::isSame('x'); $anyOf = Mockery::anyOf('a', 'b'); $not = Mockery::not('c'); $rest = Mockery::andAnyOtherArgs();",
+      "semantics": "Mockery::isEqual() returns Mockery\\Matcher\\IsEqual (whose vendor docblock declares MatcherAbstract) and Mockery::isSame() returns Mockery\\Matcher\\IsSame (whose vendor docblock declares \\Hamcrest\\Matcher), alongside AnyOf, NotAnyOf, Not, and AndAnyOtherArgs.",
+      "analyzer_expectation": "Override Mockery::isEqual() and Mockery::isSame() return types to Mockery\\Matcher\\IsEqual and Mockery\\Matcher\\IsSame so strict matcher consumers and Expectation chains accept them without type mismatches.",
+      "negative_control": "ExpectationChains.php passes all six extended matchers to typed parameters expecting concrete Mockery\\Matcher\\* classes and into Expectation::with() chains with zero diagnostics.",
+      "priority": "P1",
+      "versions": "Runtime-verified on PHP 8.3, Mockery 1.6.15, Mago 1.60.2.",
+      "coverage": ["tests/fixtures/ExpectationChains.php", "tests/runtime/ExpectationsAndVerificationRuntimeTest.php", "tests/run.php"],
+      "status": "covered"
     }
   ]
 }

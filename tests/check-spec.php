@@ -54,6 +54,14 @@ foreach ($catalog['cases'] as $case) {
             || !str_starts_with($catalog['sources'][$source]['url'], 'https://')
         ) {
             $failures[] = "{$id}: unknown or invalid source {$source}";
+            continue;
+        }
+        $url = $catalog['sources'][$source]['url'];
+        if (
+            preg_match('~^https://github\.com/[^/]+/[^/]+/blob/[a-f0-9]{40}/.+$~', $url) === 1
+            && (!is_string($catalog['sources'][$source]['sha256'] ?? null) || preg_match('/^[a-f0-9]{64}$/', $catalog['sources'][$source]['sha256']) !== 1)
+        ) {
+            $failures[] = "{$id}: source {$source} missing sha256 fingerprint";
         }
     }
 

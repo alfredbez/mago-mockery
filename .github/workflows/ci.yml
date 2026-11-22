@@ -26,13 +26,19 @@ jobs:
       - name: Validate Composer metadata
         run: composer validate --strict
 
-      - name: Install locked dependencies (latest Mago)
+      - name: Install dependencies (latest compatible Mago)
         if: matrix.mago == 'latest'
-        run: composer install --no-interaction --prefer-dist --no-progress
+        run: |
+          composer install --no-interaction --prefer-dist --no-progress
+          composer update --no-interaction --prefer-dist --no-progress carthage-software/mago
 
       - name: Install dependencies (pinned Mago)
         if: matrix.mago != 'latest'
         run: composer update --no-interaction --prefer-dist --no-progress --with="carthage-software/mago:${{ matrix.mago }}"
+
+      - name: Verify installed Mago version
+        if: matrix.mago != 'latest'
+        run: test "$(php vendor/bin/mago --version)" = "mago ${{ matrix.mago }}"
 
       - name: Validate conformance spec
         run: php tests/check-spec.php

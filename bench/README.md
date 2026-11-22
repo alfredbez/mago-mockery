@@ -4,7 +4,7 @@ The fixtures contain 64 independent scenarios with factory calls, string specs,
 object partials, expectation chains, higher-order messages, and verification chains.
 Regenerate them with `python3 bench/generate-fixtures.py`.
 
-Run the local measurements from the repository root with PHP 8.4 and Mago 1.60.2:
+Run the local measurements from the repository root with PHP 8.4 and Mago 1.60.2+:
 
 ```bash
 docker run --rm \

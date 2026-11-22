@@ -10,6 +10,10 @@ $failures = 0;
 
 $version = trim(run([PHP_BINARY, 'vendor/bin/mago', '--version'])['stdout']);
 fwrite(STDOUT, $version . "\n\n");
+if (preg_match('/^mago (\d+\.\d+\.\d+)/', $version, $versionMatch) !== 1 || version_compare($versionMatch[1], '1.60.2', '<')) {
+    fwrite(STDERR, "The fixture expectations require Mago 1.60.2 or newer\n");
+    exit(1);
+}
 
 $validated = run([PHP_BINARY, 'vendor/bin/mago', 'extension', 'validate']);
 fwrite(STDOUT, "extension validate (exit {$validated['exit']}):\n");
@@ -454,11 +458,16 @@ function analyze(bool $noExtensions, ?string $config = null, ?array $env = null)
             }
         }
 
+        $start = $primary['span']['start'];
+        $line = array_key_exists('column', $start)
+            ? (int) $start['line']
+            : (int) $start['line'] + 1;
+
         $issues[] = [
             'level' => (string) $issue['level'],
             'code' => (string) $issue['code'],
             'file' => (string) $primary['span']['file_id']['name'],
-            'line' => (int) $primary['span']['start']['line'],
+            'line' => $line,
             'message' => (string) $issue['message'],
         ];
     }

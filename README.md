@@ -1,11 +1,11 @@
 # alfredbez/mago-mockery
 
-Mockery 1.6 support for [Mago](https://github.com/carthage-software/mago) 1.60.2 through its PHP extension SDK.
+Mockery 1.6 support for [Mago](https://github.com/carthage-software/mago) 1.60.2+ through its PHP extension SDK.
 
 ## Supported versions
 
 - PHP `~8.1.0 || ~8.2.0 || ~8.3.0 || ~8.4.0 || ~8.5.0 || ~8.6.0` (CI tests PHP 8.3 and 8.4 with PHPUnit 12)
-- Mago (`carthage-software/mago`) `~1.60.2`
+- Mago (`carthage-software/mago`) `^1.60.2` (CI tests Mago `1.60.2` and `1.61.0+`)
 - Mockery (`mockery/mockery`) `^1.6`
 
 ## Installation and quickstart
@@ -55,10 +55,10 @@ vendor/bin/mago analyze
 - **PHPUnit integration.** Recognizes `startMockery()`, `setUp()`, and `mockeryTestSetUp()` as class initializers on `MockeryTestCase` subclasses and `TestCase` classes using `MockeryPHPUnitIntegration`, and registers Mockery PHPUnit lifecycle methods as entry points.
 - **Opt-in strict mocked method validation (`MAGO_MOCKERY_STRICT_METHODS=1`).** Reports `alfredbez/mockery/unknown-mocked-method` for missing literal method names (including Demeter chain roots and associative array map keys), while skipping classes with `__call`, `__callStatic`, `@method`, or `@mixin` (including inherited parents, interfaces, and traits), `stdClass` intersections, methods whitelisted via `shouldAllowMockingMethod()` in scope, dynamic names, and anonymous mocks.
 
-## Known Mago 1.60.2 SDK boundaries
+## Known Mago SDK boundaries
 
-- **Intersection-to-intersection parameter checks (`MOCKERY-G001`).** Passing `Mockery::mock(ApiClient::class)` to a parameter typed `Greeter&MockInterface` is still accepted by Mago 1.60.2 until Mago compares intersections member by member (pinned in `tests/fixtures/Negative.php`).
-- **Direct calls to protected methods on partial mocks (`MOCKERY-G003`).** Calling a `protected` method directly on a mock after `->makePartial()->shouldAllowMockingProtectedMethods()` triggers Mago's `invalid-method-access` (or `non-documented-method` when the class defines `__call`). Mago 1.60.2's `IssueFilterContext` does not expose receiver types, so filtering those diagnostics by source text is omitted to avoid hiding visibility bugs on non-mocks.
+- **Intersection-to-intersection parameter checks (`MOCKERY-G001`).** Passing `Mockery::mock(ApiClient::class)` to a parameter typed `Greeter&MockInterface` is still accepted by Mago `1.60.2` through `1.61.0` until Mago compares intersections member by member (pinned in `tests/fixtures/Negative.php`).
+- **Direct calls to protected methods on partial mocks (`MOCKERY-G003`).** Calling a `protected` method directly on a mock after `->makePartial()->shouldAllowMockingProtectedMethods()` triggers Mago's `invalid-method-access` (or `non-documented-method` when the class defines `__call`). In Mago `1.60.2` through `1.61.0`, `IssueFilterContext` does not expose receiver types, so filtering those diagnostics by source text is omitted to avoid hiding visibility bugs on non-mocks.
 - **`shouldIgnoreMissing($returnValue, $recursive)`.** Mockery's `LegacyMockInterface::shouldIgnoreMissing()` declares one parameter while `Mockery\Mock` accepts a second `$recursive` parameter.
 
 ## Tests, corpus checks, and benchmarks

@@ -1,67 +1,108 @@
 # alfredbez/mago-mockery
 
-Mockery 1.6 support for [Mago](https://github.com/carthage-software/mago) 1.60.2+ through its PHP extension SDK.
+[![ci](https://github.com/alfredbez/mago-mockery/actions/workflows/ci.yml/badge.svg)](https://github.com/alfredbez/mago-mockery/actions/workflows/ci.yml)
+[![Packagist version](https://img.shields.io/packagist/v/alfredbez/mago-mockery.svg)](https://packagist.org/packages/alfredbez/mago-mockery)
+[![Packagist downloads](https://img.shields.io/packagist/dt/alfredbez/mago-mockery.svg)](https://packagist.org/packages/alfredbez/mago-mockery)
+![PHP](https://img.shields.io/badge/php-8.1%20to%208.6-777BB4)
+[![Mago](https://img.shields.io/badge/mago-%5E1.60.2-blue)](https://github.com/carthage-software/mago)
+[![Mockery](https://img.shields.io/badge/mockery-%5E1.6-red)](https://github.com/mockery/mockery)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-## Supported versions
+Mockery 1.6 support for [Mago](https://github.com/carthage-software/mago). It types mocks as the mocked class plus `Mockery\MockInterface`, so calls on a mock are checked like calls on the real object.
 
-- PHP `~8.1.0 || ~8.2.0 || ~8.3.0 || ~8.4.0 || ~8.5.0 || ~8.6.0` (CI tests PHP 8.3 and 8.4 with PHPUnit 12)
-- Mago (`carthage-software/mago`) `^1.60.2` (CI tests Mago `1.60.2` and `1.61.0+`)
-- Mockery (`mockery/mockery`) `^1.6`
+- Types mock factories as the mocked class intersected with `MockInterface`.
+- Keeps `shouldReceive()`, `expects()`, `andReturn()`, `with()`, and the rest of the chain typed.
+- Handles trait mocks, `alias:` and `overload:` specs, partial mocks, and multiple interfaces.
+- Offers an opt-in check for literal method names that the mocked class does not have.
 
-## Installation and quickstart
+A wrong mock type Mago reports before PHPUnit runs:
 
-Until `0.1.0` is published on Packagist, register the GitHub repository and install `dev-main`:
-
-```shell
-composer config repositories.mago-mockery vcs https://github.com/alfredbez/mago-mockery
-composer require --dev alfredbez/mago-mockery:dev-main
+```php
+$api = Mockery::mock(Greeter::class);
+$api->shouldReceive('greet')->andReturn('hello');
+$this->acceptApiClient($api); // invalid-argument: a Greeter mock is not an ApiClient
 ```
 
-Once tagged on Packagist, install the package directly:
+## Setup
+
+Requires PHP 8.1 or newer, Mago `^1.60.2`, and Mockery `^1.6`.
 
 ```shell
-composer require --dev alfredbez/mago-mockery:^0.1
+composer require --dev alfredbez/mago-mockery
 ```
 
-Register the bundled worker binary in `mago.toml` and include Mockery's library directory so Mago indexes Mockery's interfaces:
+Register the bundled worker in `mago.toml`:
 
 ```toml
 [source]
 includes = ["vendor/mockery/mockery/library"]
 
 [extension-hosts.mockery]
-command = ["php", "vendor/bin/mago-mockery-worker"]
+command = ["php", "-d", "xdebug.mode=off", "-d", "pcov.enabled=0", "vendor/bin/mago-mockery-worker"]
 workers = 1
 ```
 
-Validate the extension host and run the analyzer:
+- `[source] includes` must point at Mockery's library directory. Mago reads Mockery's interfaces and matcher classes from there. Without it, mock return types have no base to intersect with.
+- The `-d` flags keep Xdebug and PCOV out of the worker. Both hooks add startup cost and coverage bookkeeping to a run that only reads code.
+
+Check the worker and run the analyzer:
 
 ```shell
 vendor/bin/mago extension validate
 vendor/bin/mago analyze
 ```
 
-### Configuration environment variables
+## Checks
 
-- `MAGO_MOCKERY_STRICT_METHODS` reports `alfredbez/mockery/unknown-mocked-method` when set to `1` and literal method names passed to `shouldReceive()`, `shouldNotReceive()`, `allows()`, `expects()`, `shouldHaveReceived()`, or `shouldNotHaveReceived()` do not exist on the mocked target class.
+| Code | Level | What it reports |
+| --- | --- | --- |
+| `alfredbez/mockery/unknown-mocked-method` | error | A literal method name passed to `shouldReceive()`, `shouldNotReceive()`, `allows()`, `expects()`, `shouldHaveReceived()`, or `shouldNotHaveReceived()` does not exist on the mocked class. Opt-in with `MAGO_MOCKERY_STRICT_METHODS=1`. |
 
-## Features
+The check also reads Demeter chain roots (`'user->name'`) and associative array map keys passed to `allows()` or `expects()`. It skips:
 
-- **Mock factory return types.** Infers `T&Mockery\MockInterface` and multi-interface intersections for `Mockery::mock()`, `Mockery::spy()`, `Mockery::namedMock()`, `Mockery::instanceMock()`, `Mockery\Container::mock()`, and the global `mock()`, `spy()`, and `namedMock()` helpers. Narrows `Mockery::fetchMock(Foo::class)` and `Mockery\Container::fetchMock(Foo::class)` to `(Foo&Mockery\MockInterface)|null`.
-- **Target string, trait, and object specs.** Resolves classes, interfaces, and traits (`Mockery::mock(SomeTrait::class)`), `alias:` and `overload:` prefixes, partial method lists (`Foo[m1, m2]`, `Foo[!m1]`), comma-separated interface lists (`Foo, Bar`), pipe-separated specs (`Foo[m1]|Bar`), constructor argument arrays, quick-definition maps, setup closures, and concrete object partial mocks (`Mockery::mock(new Foo())`).
-- **Expectation and verification chains.** Types `shouldReceive()`, `shouldNotReceive()`, `allows(string)`, and `expects(string)` as `Mockery\CompositeExpectation` carrying the mocked type. Forwarded `Expectation` methods validate parameter types (including non-negative indexes for `andReturnArg()`, variadic mixed values for `andSet()`, and `array|Closure` for `VerificationDirector::withArgs()`), `getMock()` and `mock()` restore `T&MockInterface`, and `allows(array)` preserves `T&MockInterface` alongside `makePartial()`, `shouldIgnoreMissing()`, `shouldAllowMockingProtectedMethods()`, and `byDefault()`.
-- **Higher-order messages.** Handles zero-argument, `null`, and empty-array forms (`shouldReceive()`, `shouldNotReceive()`, `allows()`, `allows([])`, `expects()`, `expects(null)`, `shouldHaveReceived()`, `shouldHaveReceived(null)`, `shouldNotHaveReceived()`, `shouldNotHaveReceived(null)`) and propagates the runtime return type (`CompositeExpectation<Mock>`, `VerificationDirector`, or `void`).
-- **Argument matchers.** Preserves concrete `Mockery\Matcher\*` return types (including `Mockery::isEqual()`, `Mockery::isSame()`, `Mockery::anyOf()`, `Mockery::notAnyOf()`, `Mockery::not()`, and `Mockery::andAnyOtherArgs()`) and refines parameter types for `Mockery::type()`, `Mockery::pattern()`, `Mockery::ducktype()`, and `Mockery::hasKey()`.
-- **PHPUnit integration.** Recognizes `startMockery()`, `setUp()`, and `mockeryTestSetUp()` as class initializers on `MockeryTestCase` subclasses and `TestCase` classes using `MockeryPHPUnitIntegration`, and registers Mockery PHPUnit lifecycle methods as entry points.
-- **Opt-in strict mocked method validation (`MAGO_MOCKERY_STRICT_METHODS=1`).** Reports `alfredbez/mockery/unknown-mocked-method` for missing literal method names (including Demeter chain roots and associative array map keys), while skipping classes with `__call`, `__callStatic`, `@method`, or `@mixin` (including inherited parents, interfaces, and traits), `stdClass` intersections, methods whitelisted via `shouldAllowMockingMethod()` in scope, dynamic names, and anonymous mocks.
+- classes with `__call`, `__callStatic`, `@method`, or `@mixin`, including inherited ones
+- `stdClass` intersections
+- methods allowed through `shouldAllowMockingMethod()` in the same scope
+- dynamic method names and anonymous mocks
 
-## Known Mago SDK boundaries
+To silence the check in one project:
 
-- **Intersection-to-intersection parameter checks (`MOCKERY-G001`).** Passing `Mockery::mock(ApiClient::class)` to a parameter typed `Greeter&MockInterface` is still accepted by Mago `1.60.2` through `1.61.0` until Mago compares intersections member by member (pinned in `tests/fixtures/Negative.php`).
-- **Direct calls to protected methods on partial mocks (`MOCKERY-G003`).** Calling a `protected` method directly on a mock after `->makePartial()->shouldAllowMockingProtectedMethods()` triggers Mago's `invalid-method-access` (or `non-documented-method` when the class defines `__call`). In Mago `1.60.2` through `1.61.0`, `IssueFilterContext` does not expose receiver types, so filtering those diagnostics by source text is omitted to avoid hiding visibility bugs on non-mocks.
-- **`shouldIgnoreMissing($returnValue, $recursive)`.** Mockery's `LegacyMockInterface::shouldIgnoreMissing()` declares one parameter while `Mockery\Mock` accepts a second `$recursive` parameter.
+```toml
+[analyzer]
+ignore = ["alfredbez/mockery/unknown-mocked-method"]
+```
 
-## Tests, corpus checks, and benchmarks
+To silence one call:
+
+```php
+// @mago-ignore analysis:alfredbez/mockery/unknown-mocked-method
+$mock->shouldReceive('handledByMagicCall');
+```
+
+## What it types
+
+| Feature | What Mago knows |
+| --- | --- |
+| `Mockery::mock()`, `spy()`, `namedMock()`, `instanceMock()`, `Container::mock()` | `T&MockInterface`, or an intersection of every mocked interface. |
+| Global `mock()`, `spy()`, and `namedMock()` helpers | The same return types as the static factories. |
+| `Mockery::fetchMock()` and `Container::fetchMock()` | `T&MockInterface`, or `null` when no mock is registered. |
+| Spec strings | Class, interface, and trait targets, `alias:` and `overload:` prefixes, partial lists (`Foo[m1, m2]`, `Foo[!m1]`), comma and pipe separated interfaces, constructor argument arrays, quick definition maps, setup closures, and object partials. |
+| `shouldReceive()`, `shouldNotReceive()`, `allows()`, `expects()` | `CompositeExpectation` carrying the mocked type. |
+| Forwarded `Expectation` methods | Parameter types, including non-negative indexes for `andReturnArg()`, variadic mixed values for `andSet()`, and `array` or `Closure` for `VerificationDirector::withArgs()`. |
+| `getMock()` and `mock()` on an expectation | `T&MockInterface`. |
+| Fluent builders | `makePartial()`, `shouldIgnoreMissing()`, `shouldAllowMockingProtectedMethods()`, and `byDefault()` keep `T&MockInterface`. |
+| Higher-order messages | Zero-argument, `null`, and empty-array forms of `shouldReceive()`, `shouldNotReceive()`, `allows()`, `expects()`, `shouldHaveReceived()`, and `shouldNotHaveReceived()`, with the runtime return type (`CompositeExpectation`, `VerificationDirector`, or `void`). |
+| Argument matchers | Concrete `Mockery\Matcher\*` types, plus refined parameter types for `Mockery::type()`, `pattern()`, `ducktype()`, and `hasKey()`. |
+| PHPUnit integration | `startMockery()`, `setUp()`, and `mockeryTestSetUp()` as class initializers on `MockeryTestCase` subclasses and `TestCase` classes using `MockeryPHPUnitIntegration`. Mockery lifecycle methods are entry points. |
+
+## Known limitations
+
+- Passing `Mockery::mock(ApiClient::class)` to a parameter typed `Greeter&MockInterface` is accepted by Mago `1.60.2` through `1.61.0`. Mago does not compare intersections member by member yet. The case is pinned in `tests/fixtures/Negative.php`.
+- Calling a `protected` method directly on a mock after `->makePartial()->shouldAllowMockingProtectedMethods()` reports Mago's own `invalid-method-access`, or `non-documented-method` when the class defines `__call`. Mago `1.60.2` through `1.61.0` does not expose receiver types to `IssueFilterContext`, so the extension does not filter those diagnostics. Filtering by source text would also hide real visibility bugs on non-mocks.
+- `shouldIgnoreMissing($returnValue, $recursive)` has a signature mismatch in Mockery itself. `LegacyMockInterface::shouldIgnoreMissing()` declares one parameter, while `Mockery\Mock` accepts a second `$recursive` parameter.
+- Literal method names are only checked when `MAGO_MOCKERY_STRICT_METHODS=1` is set. Without it, a call such as `shouldReceive('doesNotExist')` is not reported.
+
+## Development
 
 ```shell
 composer install
@@ -69,9 +110,9 @@ php tests/check-spec.php
 composer test
 ```
 
-`composer test` runs `@test:analyzer` (`php tests/run.php`, validating `bin/mago-mockery-worker`, provider unit checks, and analyzer fixture suites in default, `--no-extensions`, and `MAGO_MOCKERY_STRICT_METHODS=1` modes) and `@test:runtime` (`vendor/bin/phpunit tests/runtime`).
+`composer test` runs the analyzer suite (`php tests/run.php`) and the Mockery runtime contract tests (`vendor/bin/phpunit tests/runtime`). The analyzer suite validates `bin/mago-mockery-worker`, provider unit checks, and fixture suites in default, `--no-extensions`, and `MAGO_MOCKERY_STRICT_METHODS=1` modes.
 
-Run pinned OSS corpus snapshot checks (`mockery`, `laravel`) against `tools/corpus-baseline.json`:
+Run pinned OSS corpus checks (`mockery`, `laravel`):
 
 ```shell
 php tools/corpus-run.php --check
@@ -79,7 +120,7 @@ php tools/corpus-run.php --strict-methods
 php tools/corpus-run.php --update-baseline
 ```
 
-Run same-host local benchmarks and verify pinned conformance hashes:
+Run local benchmarks and verify conformance hashes:
 
 ```shell
 php bench/run-local.php --iterations=10000 --runs=5

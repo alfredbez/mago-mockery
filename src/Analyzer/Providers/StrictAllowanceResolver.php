@@ -149,9 +149,12 @@ final class StrictAllowanceResolver
         array &$state,
         int &$nextId,
     ): bool {
+        if ($statement->kind->value === 'Namespace') {
+            return self::walkStatements($source, self::namespaceStatements($source, $statement), $targetStart, $state, $nextId);
+        }
+
         return match ($statement->kind) {
             NodeKind::Block => self::walkStatements($source, $source->getChildren($statement), $targetStart, $state, $nextId),
-            NodeKind::Namespace_ => self::walkStatements($source, self::namespaceStatements($source, $statement), $targetStart, $state, $nextId),
             NodeKind::If => self::walkContainingIf($source, $statement, $targetStart, $state, $nextId),
             NodeKind::While, NodeKind::DoWhile, NodeKind::For, NodeKind::Foreach => self::walkContainingLoop($source, $statement, $targetStart, $state, $nextId),
             NodeKind::Try => self::walkContainingTry($source, $statement, $targetStart, $state, $nextId),
@@ -173,18 +176,19 @@ final class StrictAllowanceResolver
             return;
         }
 
+        if ($statement->kind->value === 'Namespace') {
+            foreach (self::namespaceStatements($source, $statement) as $child) {
+                $inner = self::unwrapStatement($source, $child);
+                if ($inner !== null && !self::isScopeBoundary($inner->kind)) {
+                    self::processStatement($source, $inner, $state, $nextId);
+                }
+            }
+            return;
+        }
+
         switch ($statement->kind) {
             case NodeKind::Block:
                 foreach ($source->getChildren($statement) as $child) {
-                    $inner = self::unwrapStatement($source, $child);
-                    if ($inner !== null && !self::isScopeBoundary($inner->kind)) {
-                        self::processStatement($source, $inner, $state, $nextId);
-                    }
-                }
-                return;
-
-            case NodeKind::Namespace_:
-                foreach (self::namespaceStatements($source, $statement) as $child) {
                     $inner = self::unwrapStatement($source, $child);
                     if ($inner !== null && !self::isScopeBoundary($inner->kind)) {
                         self::processStatement($source, $inner, $state, $nextId);
@@ -1045,7 +1049,7 @@ final class StrictAllowanceResolver
             return [];
         }
 
-        if ($scope->kind === NodeKind::Namespace_) {
+        if ($scope->kind->value === 'Namespace') {
             return self::namespaceStatements($source, $scope);
         }
 

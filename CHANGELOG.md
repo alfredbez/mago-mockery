@@ -6,6 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-11-24
+
+### Fixed
+
+- Strict mocked-method validation (`MAGO_MOCKERY_STRICT_METHODS=1`) tracks `shouldAllowMockingMethod()` across variable aliases, invalidates stale allowances on value and reference reassignments, and enforces dominance across branches and loops.
+- Higher-order forwarding (`shouldReceive()->method()`, `expects()->method()`, `allows()->method()`, `shouldHaveReceived()->method()`, `shouldNotHaveReceived()->method()`) validates forwarded method names against the mocked target set, preserves native diagnostics for unknown methods, reports `alfredbez/mockery/unknown-mocked-method` in strict mode, and honors explicit `shouldAllowMockingMethod()` allowances.
+- `Mockery::mock()` and sibling factories resolve `class-string<T>` targets into `T&Mockery\MockInterface` while keeping bare `class-string`, `string`, and `mixed` unresolved.
+- `Mockery::fetchMock()` and `Container::fetchMock()` resolve same-file `Mockery::namedMock()` targets while keeping cross-file and colliding spans unresolved.
+- Trait constant access filtering covers `Mockery\Container::mock()` and parenthesized factory expressions, verifies Mockery container identity, and stops suppressing after a mock variable is reassigned to a plain trait class-string.
+
 ## [0.1.0] - 2026-11-22
 
 Version `0.1.0` targets Mago `^1.60.2` (verified on `1.60.2` and `1.61.0`) and Mockery `^1.6`.

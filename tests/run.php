@@ -48,7 +48,7 @@ $expected = [
             'invalid-argument' => 1,
         ],
         'tests/fixtures/Wave9FactoriesAndTraitsNegative.php' => [
-            'direct-trait-constant-access' => 2,
+            'direct-trait-constant-access' => 3,
             'non-documented-method' => 2,
             'non-existent-method' => 6,
         ],
@@ -97,13 +97,13 @@ $expected = [
         ],
         'tests/fixtures/Wave9FactoriesAndTraits.php' => [
             'impossible-assignment' => 5,
-            'non-documented-method' => 6,
+            'non-documented-method' => 8,
             'non-existent-class-constant' => 5,
-            'non-existent-method' => 8,
+            'non-existent-method' => 9,
             'possibly-invalid-argument' => 2,
         ],
         'tests/fixtures/Wave9FactoriesAndTraitsNegative.php' => [
-            'direct-trait-constant-access' => 2,
+            'direct-trait-constant-access' => 3,
             'impossible-assignment' => 1,
             'non-documented-method' => 2,
             'non-existent-class-constant' => 1,
@@ -382,13 +382,14 @@ $failures += assertHistograms('strict enabled mode', $strictEnabled, [
         'alfredbez/mockery/unknown-mocked-method' => 13,
     ],
     'tests/strict-fixtures/Wave9StrictGaps.php' => [
-        'alfredbez/mockery/unknown-mocked-method' => 6,
+        'alfredbez/mockery/unknown-mocked-method' => 7,
         'non-documented-method' => 4,
     ],
 ]);
 foreach ([
     'dynamicAfterReassignment' => 'MockeryFixture\\Strict\\StrictGreeter',
     'dynamicAfterCopyFromOther' => 'MockeryFixture\\Strict\\StrictGreeter',
+    'dynamicAfterRefReassign' => 'MockeryFixture\\Strict\\StrictGreeter',
     'dynamicAfterConditional' => 'MockeryFixture\\Strict\\StrictGreeter',
     'dynamicAfterLoop' => 'MockeryFixture\\Strict\\StrictGreeter',
     'missingHigherOrder' => 'MockeryFixture\\Strict\\StrictGreeter',

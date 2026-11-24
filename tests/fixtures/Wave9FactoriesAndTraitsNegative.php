@@ -7,6 +7,15 @@ namespace MockeryFixture;
 use Mockery;
 use Mockery\MockInterface;
 
+final class FakeTraitFactory
+{
+    /** @return class-string<LoggableTrait> */
+    public function mock(): string
+    {
+        return LoggableTrait::class;
+    }
+}
+
 final class Wave9FactoriesAndTraitsNegative extends Support
 {
     /**
@@ -52,7 +61,10 @@ final class Wave9FactoriesAndTraitsNegative extends Support
 
         $plain = LoggableTrait::class;
         $direct = $plain::TAG;
-        unset($ok, $stale, $direct);
+
+        $fakeFactory = new FakeTraitFactory();
+        $fakeTag = ($fakeFactory->mock())::TAG;
+        unset($ok, $stale, $direct, $fakeTag);
     }
 
     public function broadFactoryWrapperControl(Wave9FactoriesAndTraits $factory): void

@@ -14,6 +14,7 @@ use Mago\Sdk\Syntax\SourceFile;
 use function array_key_exists;
 use function array_values;
 use function ltrim;
+use function str_starts_with;
 use function stripos;
 use function strlen;
 use function strtolower;
@@ -27,11 +28,27 @@ use function substr;
  */
 final class NamedMockIndex implements CodebaseScanHook
 {
+    private const HIGHER_ORDER_FACTORIES = [
+        'allows' => true,
+        'expects' => true,
+        'shouldhavereceived' => true,
+        'shouldnothavereceived' => true,
+        'shouldreceive' => true,
+    ];
+
     /** @var array<string, list<string>|null> */
     private array $fetchTargetsByKey = [];
 
     /** @var array<string, true> */
     private array $ambiguousKeys = [];
+
+    /** @var array<string, bool> */
+    private array $higherOrderAllowedByKey = [];
+
+    /** @var array<string, true> */
+    private array $ambiguousHigherOrderKeys = [];
+
+    private bool $hasHigherOrderAllowances = false;
 
     public function getTargets(): array
     {
@@ -43,19 +60,43 @@ final class NamedMockIndex implements CodebaseScanHook
         if ($context->firstBatch) {
             $this->fetchTargetsByKey = [];
             $this->ambiguousKeys = [];
+            $this->higherOrderAllowedByKey = [];
+            $this->ambiguousHigherOrderKeys = [];
+            $this->hasHigherOrderAllowances = false;
         }
 
         foreach ($context->files as $source) {
-            if (stripos($source->contents, 'fetchMock') === false) {
-                continue;
+            if (stripos($source->contents, 'fetchMock') !== false) {
+                $fileAliases = stripos($source->contents, 'namedMock') !== false
+                    ? self::collectFileNamedMocks($source)
+                    : [];
+
+                self::recordFileFetchCalls($source, $fileAliases, $this->fetchTargetsByKey, $this->ambiguousKeys);
             }
 
-            $fileAliases = stripos($source->contents, 'namedMock') !== false
-                ? self::collectFileNamedMocks($source)
-                : [];
-
-            self::recordFileFetchCalls($source, $fileAliases, $this->fetchTargetsByKey, $this->ambiguousKeys);
+            if (stripos($source->contents, 'shouldAllowMockingMethod') !== false) {
+                self::recordFileHigherOrderAllowances(
+                    $source,
+                    $this->higherOrderAllowedByKey,
+                    $this->ambiguousHigherOrderKeys,
+                    $this->hasHigherOrderAllowances,
+                );
+            }
         }
+    }
+
+    public function isHigherOrderAllowed(Span $span, string $methodName): bool
+    {
+        if (!$this->hasHigherOrderAllowances || ($span->start === 0 && $span->end === 0)) {
+            return false;
+        }
+
+        $key = $span->start . ':' . $span->end . "\0" . strtolower($methodName);
+        if (isset($this->ambiguousHigherOrderKeys[$key])) {
+            return false;
+        }
+
+        return ($this->higherOrderAllowedByKey[$key] ?? false) === true;
     }
 
     /**
@@ -81,6 +122,9 @@ final class NamedMockIndex implements CodebaseScanHook
         foreach ($source->getNodes(NodeKind::StaticMethodCall) as $call) {
             $method = self::calledStaticMethodName($source, $call);
             if ($method === null || strtolower($method) !== 'namedmock') {
+                continue;
+            }
+            if (!self::isMockeryStaticReceiver($source, $call)) {
                 continue;
             }
             self::extractNamedMockCall($source, $call, $aliases);
@@ -152,6 +196,9 @@ final class NamedMockIndex implements CodebaseScanHook
                     ? self::calledStaticMethodName($source, $call)
                     : self::calledInstanceMethodName($source, $call);
                 if ($method === null || strtolower($method) !== 'fetchmock') {
+                    continue;
+                }
+                if ($kind === NodeKind::StaticMethodCall && !self::isMockeryStaticReceiver($source, $call)) {
                     continue;
                 }
 
@@ -328,6 +375,80 @@ final class NamedMockIndex implements CodebaseScanHook
         }
 
         return null;
+    }
+
+    /**
+     * @param array<string, bool> $allowedByKey
+     * @param array<string, true> $ambiguousKeys
+     */
+    private static function recordFileHigherOrderAllowances(
+        SourceFile $source,
+        array &$allowedByKey,
+        array &$ambiguousKeys,
+        bool &$hasAny,
+    ): void {
+        foreach ($source->getNodes(NodeKind::MethodCall) as $call) {
+            $forwardedName = self::calledInstanceMethodName($source, $call);
+            if ($forwardedName === null || str_starts_with($forwardedName, '__')) {
+                continue;
+            }
+
+            $receiver = self::unwrap($source, $source->getChildren($call)[0] ?? null);
+            if ($receiver === null || $receiver->kind !== NodeKind::MethodCall) {
+                continue;
+            }
+
+            $factoryName = self::calledInstanceMethodName($source, $receiver);
+            if ($factoryName === null || !isset(self::HIGHER_ORDER_FACTORIES[strtolower($factoryName)])) {
+                continue;
+            }
+
+            $factoryArgList = self::findChildOfKind($source, $receiver, NodeKind::ArgumentList);
+            if ($factoryArgList !== null && self::positionalArgumentValues($source, $factoryArgList) !== []) {
+                continue;
+            }
+
+            $lowerMethod = strtolower($forwardedName);
+            $allowed = StrictAllowanceResolver::isAllowed($source, $call, $lowerMethod);
+            if ($allowed) {
+                $hasAny = true;
+            }
+
+            $key = $call->span->start . ':' . $call->span->end . "\0" . $lowerMethod;
+            if (isset($ambiguousKeys[$key])) {
+                continue;
+            }
+            if (array_key_exists($key, $allowedByKey)) {
+                if ($allowedByKey[$key] !== $allowed) {
+                    $ambiguousKeys[$key] = true;
+                    unset($allowedByKey[$key]);
+                }
+                continue;
+            }
+            $allowedByKey[$key] = $allowed;
+        }
+    }
+
+    private static function isMockeryStaticReceiver(SourceFile $source, Node $call): bool
+    {
+        $classNode = self::unwrap($source, $source->getChildren($call)[0] ?? null);
+        if ($classNode === null) {
+            return false;
+        }
+
+        if (
+            $classNode->kind === NodeKind::Identifier
+            || $classNode->kind === NodeKind::LocalIdentifier
+            || $classNode->kind === NodeKind::QualifiedIdentifier
+            || $classNode->kind === NodeKind::FullyQualifiedIdentifier
+        ) {
+            $resolved = $source->getResolvedName($classNode)?->name;
+            $name = ltrim($resolved ?? $source->getText($classNode), '\\');
+
+            return strtolower($name) === 'mockery';
+        }
+
+        return false;
     }
 
     private static function findChildOfKind(SourceFile $source, Node $node, NodeKind $kind): ?Node

@@ -158,7 +158,7 @@ final class HigherOrderMessageProvider implements MethodReturnTypeProvider, Call
         return $decision;
     }
 
-    private static function extractForwardedReturnType(?Type $receiverType): ?Type
+    public static function extractForwardedReturnType(?Type $receiverType): ?Type
     {
         if ($receiverType === null) {
             return null;

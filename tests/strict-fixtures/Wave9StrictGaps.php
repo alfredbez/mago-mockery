@@ -44,6 +44,12 @@ final class Wave9StrictGapsFixture
         $reassigned->shouldAllowMockingMethod('dynamicAfterCopyFromOther');
         $reassigned = $other;
         $reassigned->shouldReceive('dynamicAfterCopyFromOther')->andReturn('y');
+
+        $refBase = Mockery::mock(StrictGreeter::class);
+        $refAlias = &$refBase;
+        $refBase->shouldAllowMockingMethod('dynamicAfterRefReassign');
+        $refAlias = Mockery::mock(StrictGreeter::class);
+        $refBase->shouldReceive('dynamicAfterRefReassign')->andReturn('z');
     }
 
     /**

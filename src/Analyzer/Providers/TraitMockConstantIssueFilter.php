@@ -15,7 +15,6 @@ use function preg_match;
 use function preg_match_all;
 use function preg_quote;
 use function rtrim;
-use function str_contains;
 use function str_starts_with;
 use function strlen;
 use function substr;
@@ -28,7 +27,9 @@ use function trim;
  */
 final class TraitMockConstantIssueFilter implements IssueFilterHook
 {
-    private const FACTORY_CALL_PREFIX = '/^(?:\\\\?(?:Mockery|m)::(?:mock|spy|namedMock|instanceMock)|(?:mock|spy|namedMock)|\$[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*(?:->[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*(?:\([^()]*\))?)*->(?:mock|spy|namedMock|instanceMock)|\\\\?(?:Mockery|m)::getContainer\s*\(\s*\)\s*->\s*(?:mock|spy|namedMock|instanceMock))\s*\(/i';
+    private const DIRECT_FACTORY_PREFIX = '/^(?:\\\\?Mockery::(?:mock|spy|namedMock|instanceMock)|(?:mock|spy|namedMock)|\\\\?Mockery::getContainer\s*\(\s*\)\s*->\s*(?:mock|spy|namedMock|instanceMock))\s*\(/i';
+    private const ALIASED_FACTORY_PREFIX = '/^([A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)::(?:mock|spy|namedMock|instanceMock|getContainer\s*\(\s*\)\s*->\s*(?:mock|spy|namedMock|instanceMock))\s*\(/i';
+    private const CONTAINER_CALL_PREFIX = '/^(\$[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)\s*->\s*(?:mock|spy|namedMock|instanceMock)\s*\(/i';
 
     public function getCodes(): array
     {
@@ -57,14 +58,15 @@ final class TraitMockConstantIssueFilter implements IssueFilterHook
             return IssueFilterDecision::Keep;
         }
 
+        $prefix = substr($context->contents, 0, $primarySpan->start);
+        $cleanPrefix = self::stripComments($prefix);
         $unwrapped = self::stripOuterParens($targetExpr);
-        if (self::isFactoryCallExpression($unwrapped)) {
+        if (self::isFactoryCallExpression($unwrapped, $cleanPrefix)) {
             return IssueFilterDecision::Remove;
         }
 
         if (preg_match('/^\$[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*$/', $unwrapped) === 1) {
-            $prefix = substr($context->contents, 0, $primarySpan->start);
-            if (self::isLatestAssignmentMockInScope($prefix, $unwrapped)) {
+            if (self::isLatestAssignmentMockInScope($cleanPrefix, $unwrapped)) {
                 return IssueFilterDecision::Remove;
             }
         }
@@ -159,9 +161,65 @@ final class TraitMockConstantIssueFilter implements IssueFilterHook
         return $expr;
     }
 
-    private static function isFactoryCallExpression(string $expr): bool
+    private static function isFactoryCallExpression(string $expr, string $cleanFilePrefix): bool
     {
-        return preg_match(self::FACTORY_CALL_PREFIX, ltrim($expr)) === 1;
+        $trimmed = ltrim($expr);
+        if (preg_match(self::DIRECT_FACTORY_PREFIX, $trimmed) === 1) {
+            return true;
+        }
+
+        if (preg_match(self::ALIASED_FACTORY_PREFIX, $trimmed, $aliasMatch) === 1) {
+            $alias = preg_quote($aliasMatch[1], '/');
+            if (preg_match('/\buse\s+\\\\?Mockery\s+as\s+' . $alias . '\s*;/i', $cleanFilePrefix) === 1) {
+                return true;
+            }
+        }
+
+        if (preg_match(self::CONTAINER_CALL_PREFIX, $trimmed, $containerMatch) === 1) {
+            return self::isMockeryContainerVariable($cleanFilePrefix, $containerMatch[1]);
+        }
+
+        return false;
+    }
+
+    private static function isMockeryContainerVariable(string $cleanFilePrefix, string $var): bool
+    {
+        $containerAliases = ['\\\\?Mockery\\\\Container'];
+        if (preg_match('/\buse\s+\\\\?Mockery\\\\Container\s*;/i', $cleanFilePrefix) === 1) {
+            $containerAliases[] = 'Container';
+        }
+        if (preg_match_all('/\buse\s+\\\\?Mockery\\\\Container\s+as\s+([A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)\s*;/i', $cleanFilePrefix, $aliasMatches) >= 1) {
+            foreach ($aliasMatches[1] as $alias) {
+                $containerAliases[] = preg_quote($alias, '/');
+            }
+        }
+        $typePattern = '(?:' . implode('|', $containerAliases) . ')';
+
+        $scope = self::enclosingFunctionSlice($cleanFilePrefix);
+        $varQuoted = preg_quote($var, '/');
+
+        // Check latest assignment in enclosing function scope first.
+        $assignPattern = '/(?<![A-Za-z0-9_])' . $varQuoted . '\s*=(?!=)\s*([^;]+)/';
+        if (preg_match_all($assignPattern, $scope, $matches) >= 1) {
+            $lastRhs = self::stripOuterParens(trim($matches[1][array_key_last($matches[1])]));
+            if (preg_match('/^(?:new\s+' . $typePattern . '\b|\\\\?Mockery::getContainer\s*\()/i', $lastRhs) === 1) {
+                return true;
+            }
+            if (preg_match('/^([A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)::getContainer\s*\(/i', $lastRhs, $m) === 1) {
+                return preg_match('/\buse\s+\\\\?Mockery\s+as\s+' . preg_quote($m[1], '/') . '\s*;/i', $cleanFilePrefix) === 1;
+            }
+
+            return false;
+        }
+
+        // Check enclosing function parameter type hint (e.g. `Container $container`).
+        $bracePos = strpos($scope, '{');
+        $header = $bracePos !== false ? substr($scope, 0, $bracePos) : $scope;
+        if (preg_match('/(?<![A-Za-z0-9_\\\\])' . $typePattern . '\s+' . $varQuoted . '(?![A-Za-z0-9_])/i', $header) === 1) {
+            return true;
+        }
+
+        return false;
     }
 
     /**
@@ -169,17 +227,14 @@ final class TraitMockConstantIssueFilter implements IssueFilterHook
      * produces a Mockery mock (directly or through a plain variable alias), invalidating
      * stale mock assignments once `$var` is reassigned to anything else.
      */
-    private static function isLatestAssignmentMockInScope(string $prefix, string $var): bool
+    private static function isLatestAssignmentMockInScope(string $cleanFilePrefix, string $var): bool
     {
-        $clean = self::stripComments($prefix);
-        if (preg_match_all('/\bfunction\b[^{]*\{/', $clean, $fnMatches, PREG_OFFSET_CAPTURE) >= 1) {
-            $lastFn = $fnMatches[0][array_key_last($fnMatches[0])];
-            $clean = substr($clean, $lastFn[1]);
-        }
+        $scopeOffset = 0;
+        $scope = self::enclosingFunctionSlice($cleanFilePrefix, $scopeOffset);
 
         $visited = [];
         $currentVar = $var;
-        $cursor = $clean;
+        $cursor = $scope;
         while (!isset($visited[$currentVar])) {
             $visited[$currentVar] = true;
             $pattern = '/(?<![A-Za-z0-9_])' . preg_quote($currentVar, '/') . '\s*=(?!=)\s*([^;]+)/';
@@ -188,13 +243,14 @@ final class TraitMockConstantIssueFilter implements IssueFilterHook
             }
 
             $lastIndex = array_key_last($matches[1]);
+            $assignOffset = $matches[0][$lastIndex][1];
             $rhs = self::stripOuterParens(trim($matches[1][$lastIndex][0]));
-            if (self::isFactoryCallExpression($rhs)) {
+            $prefixAtAssign = substr($cleanFilePrefix, 0, $scopeOffset + $assignOffset);
+            if (self::isFactoryCallExpression($rhs, $prefixAtAssign)) {
                 return true;
             }
 
             if (preg_match('/^(\$[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)$/', $rhs, $aliasMatch) === 1) {
-                $assignOffset = $matches[0][$lastIndex][1];
                 $cursor = substr($cursor, 0, $assignOffset);
                 $currentVar = $aliasMatch[1];
                 continue;
@@ -204,6 +260,20 @@ final class TraitMockConstantIssueFilter implements IssueFilterHook
         }
 
         return false;
+    }
+
+    private static function enclosingFunctionSlice(string $clean, int &$offset = 0): string
+    {
+        if (preg_match_all('/\bfunction\b[^{]*\{/', $clean, $fnMatches, PREG_OFFSET_CAPTURE) >= 1) {
+            $lastFn = $fnMatches[0][array_key_last($fnMatches[0])];
+            $offset = (int) $lastFn[1];
+
+            return substr($clean, $offset);
+        }
+
+        $offset = 0;
+
+        return $clean;
     }
 
     private static function stripComments(string $code): string

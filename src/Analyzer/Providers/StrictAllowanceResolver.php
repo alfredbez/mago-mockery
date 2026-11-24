@@ -10,8 +10,13 @@ use Mago\Sdk\Syntax\SourceFile;
 
 use function array_intersect_key;
 use function array_keys;
+use function array_pop;
 use function count;
+use function ltrim;
+use function str_contains;
+use function str_starts_with;
 use function strlen;
+use function strpos;
 use function strtolower;
 use function substr;
 
@@ -62,6 +67,7 @@ final class StrictAllowanceResolver
         $state = [
             'vars' => [],
             'allowed' => [],
+            'refs' => [],
             'terminated' => false,
         ];
 
@@ -213,7 +219,9 @@ final class StrictAllowanceResolver
             case NodeKind::Unset:
                 foreach ($source->getDescendants($statement, NodeKind::DirectVariable) as $var) {
                     if (!self::isInsideNestedScope($source, $statement, $var)) {
-                        self::killVar($state, $source->getText($var), $nextId);
+                        $varName = $source->getText($var);
+                        self::detachRef($state, $varName);
+                        $state['vars'][$varName] = self::freshId($nextId);
                     }
                 }
                 return;
@@ -591,6 +599,19 @@ final class StrictAllowanceResolver
         }
 
         $lhsVar = $source->getText($lhsUnwrapped);
+        $isByRef = self::isByReferenceAssignment($source, $assignment, $op, $rhsNode);
+        if ($isByRef && $rhsNode !== null) {
+            self::detachRef($state, $lhsVar);
+            $refTarget = self::extractReferenceTargetVar($source, $rhsNode);
+            if ($refTarget !== null) {
+                self::linkRef($state, $lhsVar, $refTarget);
+                $state['vars'][$lhsVar] = self::varId($state, $refTarget);
+            } else {
+                $state['vars'][$lhsVar] = self::freshId($nextId);
+            }
+            return;
+        }
+
         if ($op !== '=' || $rhsNode === null) {
             self::killVar($state, $lhsVar, $nextId);
             return;
@@ -598,11 +619,51 @@ final class StrictAllowanceResolver
 
         $sourceVar = self::resolveIdentityPreservingRhsVar($source, $rhsNode);
         if ($sourceVar !== null) {
-            $state['vars'][$lhsVar] = self::varId($state, $sourceVar);
+            self::assignVarId($state, $lhsVar, self::varId($state, $sourceVar));
             return;
         }
 
         self::killVar($state, $lhsVar, $nextId);
+    }
+
+    private static function isByReferenceAssignment(SourceFile $source, Node $assignment, string $op, ?Node $rhsNode): bool
+    {
+        if (str_contains($op, '&')) {
+            return true;
+        }
+
+        if ($rhsNode !== null && str_starts_with(ltrim($source->getText($rhsNode)), '&')) {
+            return true;
+        }
+
+        $text = $source->getText($assignment);
+        $eqPos = strpos($text, '=');
+        if ($eqPos !== false && str_starts_with(ltrim(substr($text, $eqPos + 1)), '&')) {
+            return true;
+        }
+
+        return false;
+    }
+
+    private static function extractReferenceTargetVar(SourceFile $source, Node $rhsNode): ?string
+    {
+        $node = self::unwrap($source, $rhsNode);
+        if ($node === null) {
+            return null;
+        }
+
+        if ($node->kind === NodeKind::DirectVariable) {
+            return $source->getText($node);
+        }
+
+        foreach ($source->getChildren($node) as $child) {
+            $inner = self::unwrap($source, $child);
+            if ($inner !== null && $inner->kind === NodeKind::DirectVariable) {
+                return $source->getText($inner);
+            }
+        }
+
+        return null;
     }
 
     private static function resolveIdentityPreservingRhsVar(SourceFile $source, Node $rhsNode): ?string
@@ -688,13 +749,24 @@ final class StrictAllowanceResolver
             if (self::isInsideNestedScope($source, $subtree, $assignment)) {
                 continue;
             }
-            $lhs = $source->getChildren($assignment)[0] ?? null;
+            $children = $source->getChildren($assignment);
+            $lhs = $children[0] ?? null;
+            $opNode = $children[1] ?? null;
+            $rhs = $children !== [] ? $children[count($children) - 1] : null;
+            $op = $opNode !== null ? trim($source->getText($opNode)) : '';
             if ($lhs === null) {
                 continue;
             }
             $lhsUnwrapped = self::unwrap($source, $lhs);
             if ($lhsUnwrapped !== null && $lhsUnwrapped->kind === NodeKind::DirectVariable) {
-                self::killVar($state, $source->getText($lhsUnwrapped), $nextId);
+                $lhsVar = $source->getText($lhsUnwrapped);
+                if (self::isByReferenceAssignment($source, $assignment, $op, $rhs) && $rhs !== null) {
+                    $refTarget = self::extractReferenceTargetVar($source, $rhs);
+                    if ($refTarget !== null) {
+                        self::linkRef($state, $lhsVar, $refTarget);
+                    }
+                }
+                self::killVar($state, $lhsVar, $nextId);
                 continue;
             }
             foreach ($source->getDescendants($lhs, NodeKind::DirectVariable) as $var) {
@@ -761,7 +833,7 @@ final class StrictAllowanceResolver
         }
 
         if ($live === []) {
-            return ['vars' => [], 'allowed' => [], 'terminated' => true];
+            return ['vars' => [], 'allowed' => [], 'refs' => [], 'terminated' => true];
         }
 
         if (count($live) === 1) {
@@ -806,9 +878,19 @@ final class StrictAllowanceResolver
             }
         }
 
+        $joinedRefs = [];
+        foreach ($live as $branch) {
+            foreach ($branch['refs'] as $from => $targets) {
+                foreach ($targets as $to => $_) {
+                    $joinedRefs[$from][$to] = true;
+                }
+            }
+        }
+
         return [
             'vars' => $joinedVars,
             'allowed' => $joinedAllowed,
+            'refs' => $joinedRefs,
             'terminated' => false,
         ];
     }
@@ -1171,7 +1253,64 @@ final class StrictAllowanceResolver
      */
     private static function killVar(array &$state, string $varName, int &$nextId): void
     {
-        $state['vars'][$varName] = self::freshId($nextId);
+        self::assignVarId($state, $varName, self::freshId($nextId));
+    }
+
+    /**
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     */
+    private static function assignVarId(array &$state, string $varName, string $newId): void
+    {
+        $state['vars'][$varName] = $newId;
+        if (!isset($state['refs'][$varName])) {
+            return;
+        }
+
+        $visited = [$varName => true];
+        $queue = array_keys($state['refs'][$varName]);
+        while (($member = array_pop($queue)) !== null) {
+            if (isset($visited[$member])) {
+                continue;
+            }
+            $visited[$member] = true;
+            $state['vars'][$member] = $newId;
+            foreach (array_keys($state['refs'][$member] ?? []) as $neighbor) {
+                if (!isset($visited[$neighbor])) {
+                    $queue[] = $neighbor;
+                }
+            }
+        }
+    }
+
+    /**
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     */
+    private static function linkRef(array &$state, string $a, string $b): void
+    {
+        if ($a === $b) {
+            return;
+        }
+
+        $state['refs'][$a][$b] = true;
+        $state['refs'][$b][$a] = true;
+    }
+
+    /**
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     */
+    private static function detachRef(array &$state, string $varName): void
+    {
+        if (!isset($state['refs'][$varName])) {
+            return;
+        }
+
+        foreach (array_keys($state['refs'][$varName]) as $peer) {
+            unset($state['refs'][$peer][$varName]);
+            if (($state['refs'][$peer] ?? []) === []) {
+                unset($state['refs'][$peer]);
+            }
+        }
+        unset($state['refs'][$varName]);
     }
 
     private static function freshId(int &$nextId): string

@@ -12,6 +12,13 @@ interface SubGreeter extends Greeter
     public function farewell(string $name): string;
 }
 
+final class UnrelatedNamedMockFactory
+{
+    public static function namedMock(string $name, string $target): void
+    {
+    }
+}
+
 final class Wave9FactoriesAndTraits extends Support
 {
     /**
@@ -40,6 +47,7 @@ final class Wave9FactoriesAndTraits extends Support
     public function sameFileNamedMockAndFetchMock(): void
     {
         $named = Mockery::namedMock('Wave9SameFileAlias', Greeter::class);
+        UnrelatedNamedMockFactory::namedMock('Wave9SameFileAlias', Support::class);
         $named->greet('direct');
 
         $fetched = Mockery::fetchMock('Wave9SameFileAlias');
@@ -56,6 +64,8 @@ final class Wave9FactoriesAndTraits extends Support
     {
         $greeter = Mockery::mock(Greeter::class);
         $greeter->shouldReceive()->greet('ok')->andReturn('hi');
+        $greeter->shouldAllowMockingMethod('allowedHigherOrderDynamic');
+        $greeter->shouldReceive()->allowedHigherOrderDynamic('ok')->andReturn('dyn');
 
         $sub = Mockery::mock(SubGreeter::class);
         $sub->shouldReceive()->greet('parent-interface-ok')->andReturn('hi');

@@ -39,7 +39,7 @@ final class ExpectationChains
         $greeter->allows([])->greet('x')->andReturns('hi');
         $greeter->expects()->greet('x')->once()->andReturn('hi');
         $greeter->expects(null)->greet('x')->andReturn('hi');
-        $greeter->shouldReceive()->withAnyArgs()->andReturn('anything');
+        Mockery::mock()->shouldReceive()->withAnyArgs()->andReturn('anything');
         $greeter->shouldHaveReceived()->greet('x')->once();
         $greeter->shouldHaveReceived(null)->greet('x')->once();
         $greeter->shouldNotReceive()->greet('x');

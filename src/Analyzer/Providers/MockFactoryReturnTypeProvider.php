@@ -19,6 +19,10 @@ use Mago\Sdk\Analyzer\Type;
  */
 final class MockFactoryReturnTypeProvider implements MethodReturnTypeProvider
 {
+    public function __construct(
+        private readonly ?NamedMockIndex $namedMocks = null,
+    ) {}
+
     public function getTargets(): array
     {
         return [
@@ -35,7 +39,7 @@ final class MockFactoryReturnTypeProvider implements MethodReturnTypeProvider
     public function getReturnType(ReturnTypeProviderContext $context): ?Type
     {
         if (strtolower($context->invocation->name) === 'fetchmock') {
-            return MockTypeFactory::fromFetchMock($context->invocation, $context->codebase);
+            return MockTypeFactory::fromFetchMock($context->invocation, $context->codebase, $this->namedMocks);
         }
 
         return MockTypeFactory::fromInvocation($context->invocation, $context->codebase);

@@ -14,6 +14,8 @@ use Mago\Sdk\Analyzer\CallableSignatureProviderContext;
 use Mago\Sdk\Analyzer\Codebase;
 use Mago\Sdk\Analyzer\Invocation;
 use Mago\Sdk\Analyzer\InvocationKind;
+use Mago\Sdk\Analyzer\Metadata\ClassLikeKind;
+use Mago\Sdk\Analyzer\Metadata\ClassLikeMetadata;
 use Mago\Sdk\Analyzer\Metadata\FunctionLikeMetadata;
 use Mago\Sdk\Analyzer\Metadata\MetadataFlags;
 use Mago\Sdk\Analyzer\Metadata\ParameterMetadata;
@@ -53,6 +55,43 @@ function providerWorkloads(): array
 
     $span = new Span(0, 1);
     $location = new SourceLocation('bench/fixtures/Support.php', $span);
+    $repoLower = strtolower(Repository::class);
+    $cache->values[Protocol::GET_CLASS_LIKES << 4][$repoLower] = new ClassLikeMetadata(
+        name: Repository::class,
+        originalName: Repository::class,
+        kind: ClassLikeKind::Interface,
+        location: $location,
+        nameLocation: $location,
+        flags: new MetadataFlags(0),
+        directParentClass: null,
+        directParentInterfaces: [],
+        parentInterfaces: [],
+        parentClasses: [],
+        requiredExtends: [],
+        requiredImplements: [],
+        usedTraits: [],
+        unresolvedHierarchyDependencies: [],
+        methods: ['find'],
+        pseudoMethods: [],
+        staticPseudoMethods: [],
+        properties: [],
+        magicProperties: [],
+        constants: [],
+        enumCases: [],
+        children: null,
+        permittedInheritors: null,
+        templates: [],
+        attributes: [],
+        typeAliases: [],
+        mixins: [],
+        enumType: null,
+        sealedMethods: null,
+        sealedProperties: null,
+        availableVersions: [],
+    );
+    $cache->existence[256 | Protocol::EXISTS_METHOD]["{$repoLower}\0__call"] = false;
+    $cache->existence[256 | Protocol::EXISTS_METHOD]["{$repoLower}\0__callstatic"] = false;
+    $cache->existence[256 | Protocol::EXISTS_METHOD]["{$repoLower}\0find"] = true;
     foreach ([
         'with' => [['args', Type::mixed(), MetadataFlags::VARIADIC]],
         'times' => [['limit', Type::int(), 0]],

@@ -116,9 +116,11 @@ final class NoArgumentFactoryProvider implements MethodReturnTypeProvider, Calla
             ? 'Mockery\\ExpectsHigherOrderMessage'
             : 'Mockery\\HigherOrderMessage';
 
+        $parameters = $mockType !== null ? [$forwardedReturnType, $mockType] : [$forwardedReturnType];
+
         return Type::fromAtomic(new NamedObjectType(
             name: $class,
-            parameters: [$forwardedReturnType],
+            parameters: $parameters,
             variances: null,
             static: false,
             isThis: false,

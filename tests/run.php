@@ -8,14 +8,19 @@ require __DIR__ . '/check-providers.php';
 
 $failures = 0;
 
-$version = trim(run([PHP_BINARY, 'vendor/bin/mago', '--version'])['stdout']);
+$magoBinEnv = getenv('MAGO_BIN');
+$magoCommand = ($magoBinEnv !== false && $magoBinEnv !== '')
+    ? [$magoBinEnv]
+    : [PHP_BINARY, 'vendor/bin/mago'];
+
+$version = trim(run([...$magoCommand, '--version'])['stdout']);
 fwrite(STDOUT, $version . "\n\n");
 if (preg_match('/^mago (\d+\.\d+\.\d+)/', $version, $versionMatch) !== 1 || version_compare($versionMatch[1], '1.60.2', '<')) {
     fwrite(STDERR, "The fixture expectations require Mago 1.60.2 or newer\n");
     exit(1);
 }
 
-$validated = run([PHP_BINARY, 'vendor/bin/mago', 'extension', 'validate']);
+$validated = run([...$magoCommand, 'extension', 'validate']);
 fwrite(STDOUT, "extension validate (exit {$validated['exit']}):\n");
 fwrite(STDOUT, trim($validated['stdout'] . $validated['stderr']) . "\n\n");
 if ($validated['exit'] !== 0) {
@@ -38,8 +43,14 @@ $expected = [
         'tests/fixtures/ExpectationChains.php' => [],
         'tests/fixtures/MockSpecs.php' => [],
         'tests/fixtures/Positive.php' => [],
+        'tests/fixtures/Wave9FactoriesAndTraits.php' => [],
         'tests/fixtures/IntersectionControl.php' => [
             'invalid-argument' => 1,
+        ],
+        'tests/fixtures/Wave9FactoriesAndTraitsNegative.php' => [
+            'direct-trait-constant-access' => 2,
+            'non-documented-method' => 2,
+            'non-existent-method' => 6,
         ],
         'tests/fixtures/Negative.php' => [
             // direct trait constant access on non-mock $traitClass = LoggableTrait::class
@@ -83,6 +94,20 @@ $expected = [
         'tests/fixtures/Positive.php' => [
             'non-existent-method' => 7,
             'possibly-invalid-argument' => 1,
+        ],
+        'tests/fixtures/Wave9FactoriesAndTraits.php' => [
+            'impossible-assignment' => 5,
+            'non-documented-method' => 6,
+            'non-existent-class-constant' => 5,
+            'non-existent-method' => 8,
+            'possibly-invalid-argument' => 2,
+        ],
+        'tests/fixtures/Wave9FactoriesAndTraitsNegative.php' => [
+            'direct-trait-constant-access' => 2,
+            'impossible-assignment' => 1,
+            'non-documented-method' => 2,
+            'non-existent-class-constant' => 1,
+            'non-existent-method' => 7,
         ],
         // The control group must not change.
         'tests/fixtures/IntersectionControl.php' => [
@@ -348,12 +373,49 @@ $strictDefault = analyze(false, 'tests/strict-methods.toml');
 $strictEnabled = analyze(false, 'tests/strict-methods.toml', ['MAGO_MOCKERY_STRICT_METHODS' => '1']);
 $failures += assertHistograms('strict default mode', $strictDefault, [
     'tests/strict-fixtures/StrictMethods.php' => [],
+    'tests/strict-fixtures/Wave9StrictGaps.php' => [
+        'non-documented-method' => 4,
+    ],
 ]);
 $failures += assertHistograms('strict enabled mode', $strictEnabled, [
     'tests/strict-fixtures/StrictMethods.php' => [
         'alfredbez/mockery/unknown-mocked-method' => 13,
     ],
+    'tests/strict-fixtures/Wave9StrictGaps.php' => [
+        'alfredbez/mockery/unknown-mocked-method' => 6,
+        'non-documented-method' => 4,
+    ],
 ]);
+foreach ([
+    'dynamicAfterReassignment' => 'MockeryFixture\\Strict\\StrictGreeter',
+    'dynamicAfterCopyFromOther' => 'MockeryFixture\\Strict\\StrictGreeter',
+    'dynamicAfterConditional' => 'MockeryFixture\\Strict\\StrictGreeter',
+    'dynamicAfterLoop' => 'MockeryFixture\\Strict\\StrictGreeter',
+    'missingHigherOrder' => 'MockeryFixture\\Strict\\StrictGreeter',
+    'missingHigherOrderOnSub' => 'MockeryFixture\\Strict\\SubStrictGreeter',
+] as $missingMethod => $targetType) {
+    $failures += assertMessageCount(
+        'strict enabled mode',
+        $strictEnabled,
+        'tests/strict-fixtures/Wave9StrictGaps.php',
+        'alfredbez/mockery/unknown-mocked-method',
+        "Method `{$missingMethod}` does not exist on mocked type `{$targetType}`",
+        1,
+    );
+}
+foreach ([
+    'Method `missingOnClassString` does not exist on type `MockeryFixture\\Greeter`',
+    'Method `missingOnNamedFetch` does not exist on type `MockeryFixture\\Greeter`',
+] as $needle) {
+    $failures += assertMessageCount(
+        'with extension',
+        $with,
+        'tests/fixtures/Wave9FactoriesAndTraitsNegative.php',
+        'non-existent-method',
+        $needle,
+        1,
+    );
+}
 foreach ([
     'doesNotExist',
     'missingChained',
@@ -419,7 +481,10 @@ function run(array $command, ?array $env = null): array
  */
 function analyze(bool $noExtensions, ?string $config = null, ?array $env = null): array
 {
-    $command = [PHP_BINARY, 'vendor/bin/mago'];
+    $magoBinEnv = getenv('MAGO_BIN');
+    $command = ($magoBinEnv !== false && $magoBinEnv !== '')
+        ? [$magoBinEnv]
+        : [PHP_BINARY, 'vendor/bin/mago'];
     if ($config !== null) {
         $command[] = '--config';
         $command[] = $config;

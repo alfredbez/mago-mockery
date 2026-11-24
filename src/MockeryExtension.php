@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace AlfredBez\MagoMockery;
 
 use AlfredBez\MagoMockery\Analyzer\MockeryPlugin;
+use AlfredBez\MagoMockery\Analyzer\NamedFetchMockPlugin;
 use Mago\Sdk\Extension;
 
 final class MockeryExtension
@@ -19,7 +20,7 @@ final class MockeryExtension
             identifier: 'alfredbez/mago-mockery',
             name: 'Mockery',
             version: self::VERSION,
-            analyzerPlugins: [new MockeryPlugin()],
+            analyzerPlugins: [new MockeryPlugin(), new NamedFetchMockPlugin()],
         );
     }
 }

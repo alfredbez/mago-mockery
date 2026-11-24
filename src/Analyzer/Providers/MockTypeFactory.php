@@ -6,8 +6,14 @@ namespace AlfredBez\MagoMockery\Analyzer\Providers;
 
 use Mago\Sdk\Analyzer\Codebase;
 use Mago\Sdk\Analyzer\Invocation;
+use Mago\Sdk\Analyzer\Metadata\ClassLikeMetadata;
+use Mago\Sdk\Analyzer\Metadata\MemberIdentifier;
 use Mago\Sdk\Analyzer\Type;
+use Mago\Sdk\Analyzer\Type\ClassLikeStringType;
+use Mago\Sdk\Analyzer\Type\ClassLikeStringVariant;
 use Mago\Sdk\Analyzer\Type\NamedObjectType;
+use Mago\Sdk\Analyzer\Type\ScalarType;
+use Mago\Sdk\Analyzer\Type\ScalarTypeKind;
 
 /**
  * Builds `Foo&MockInterface` for a mocked class name.
@@ -59,6 +65,10 @@ final class MockTypeFactory
                 continue;
             }
 
+            foreach (self::extractClassStringTargets($argument->type) as $candidate) {
+                self::addTargetIfValid($candidate, $codebase, $classes);
+            }
+
             foreach (self::extractObjectTargets($argument->type) as $candidate) {
                 self::addTargetIfValid($candidate, $codebase, $classes);
             }
@@ -74,7 +84,7 @@ final class MockTypeFactory
     /**
      * @return list<string>
      */
-    private static function extractClassesFromSpec(string $spec): array
+    public static function extractClassesFromSpec(string $spec): array
     {
         $names = [];
         foreach (explode('|', $spec) as $part) {
@@ -133,6 +143,48 @@ final class MockTypeFactory
     /**
      * @return list<string>
      */
+    private static function extractClassStringTargets(Type $type): array
+    {
+        if (count($type->atomicTypes) !== 1) {
+            return [];
+        }
+
+        $atomic = $type->atomicTypes[0];
+        if (
+            !$atomic instanceof ScalarType
+            || $atomic->kind !== ScalarTypeKind::ClassLikeString
+            || !$atomic->refinement instanceof ClassLikeStringType
+        ) {
+            return [];
+        }
+
+        $variant = $atomic->refinement->variant;
+        if ($variant !== ClassLikeStringVariant::OfType && $variant !== ClassLikeStringVariant::Generic) {
+            return [];
+        }
+
+        $constraint = $atomic->refinement->constraint;
+        if (!$constraint instanceof NamedObjectType) {
+            return [];
+        }
+
+        if (isset(self::IGNORED_OBJECT_TYPES[strtolower($constraint->name)])) {
+            return [];
+        }
+
+        $targets = [$constraint->name];
+        foreach ($constraint->intersections ?? [] as $intersection) {
+            if ($intersection instanceof NamedObjectType) {
+                $targets[] = $intersection->name;
+            }
+        }
+
+        return $targets;
+    }
+
+    /**
+     * @return list<string>
+     */
     private static function extractObjectTargets(Type $type): array
     {
         if (count($type->atomicTypes) !== 1) {
@@ -176,16 +228,32 @@ final class MockTypeFactory
     /**
      * Resolves Mockery::fetchMock($name) and Container::fetchMock($name) to `(T&MockInterface)|null`.
      */
-    public static function fromFetchMock(Invocation $invocation, Codebase $codebase): ?Type
+    public static function fromFetchMock(Invocation $invocation, Codebase $codebase, ?NamedMockIndex $namedMocks = null): ?Type
     {
-        $literal = $invocation->getArgument(0, 'name', 'reference')?->type?->getLiteralString();
-        if ($literal === null) {
+        $argType = $invocation->getArgument(0, 'name', 'reference')?->type;
+        if ($argType === null) {
             return null;
         }
 
         $classes = [];
-        foreach (self::extractClassesFromSpec($literal) as $candidate) {
-            self::addTargetIfValid($candidate, $codebase, $classes);
+        $literal = $argType->getLiteralString();
+        if ($literal !== null) {
+            foreach (self::extractClassesFromSpec($literal) as $candidate) {
+                self::addTargetIfValid($candidate, $codebase, $classes);
+            }
+
+            if ($classes === [] && $namedMocks !== null) {
+                $indexed = $namedMocks->targetsForFetch($invocation->span, $literal);
+                if ($indexed !== null) {
+                    foreach ($indexed as $candidate) {
+                        self::addTargetIfValid($candidate, $codebase, $classes);
+                    }
+                }
+            }
+        } else {
+            foreach (self::extractClassStringTargets($argType) as $candidate) {
+                self::addTargetIfValid($candidate, $codebase, $classes);
+            }
         }
 
         if ($classes === []) {
@@ -225,5 +293,123 @@ final class MockTypeFactory
             intersections: $intersections,
             remappedParameters: false,
         ));
+    }
+
+    /**
+     * Extracts concrete/interface/trait target class names from a mock intersection type.
+     *
+     * Returns an empty list when the mock is anonymous, includes `stdClass`, or cannot
+     * be narrowed to a single named object intersection.
+     *
+     * @return list<string>
+     */
+    public static function extractTargetClasses(?Type $receiverType): array
+    {
+        if ($receiverType === null) {
+            return [];
+        }
+
+        $unwrapped = CompositeExpectationProvider::extractMockType($receiverType);
+        $mockType = $unwrapped ?? $receiverType;
+
+        if (count($mockType->atomicTypes) !== 1) {
+            return [];
+        }
+
+        $atomic = $mockType->atomicTypes[0];
+        if (!$atomic instanceof NamedObjectType) {
+            return [];
+        }
+
+        $classes = [];
+        $candidates = [$atomic->name];
+        foreach ($atomic->intersections ?? [] as $intersection) {
+            if ($intersection instanceof NamedObjectType) {
+                $candidates[] = $intersection->name;
+            }
+        }
+
+        foreach ($candidates as $candidate) {
+            $lower = strtolower($candidate);
+            if ($lower === 'stdclass') {
+                return [];
+            }
+
+            if (
+                $lower === 'mockery\\mock'
+                || $lower === 'mockery\\mockinterface'
+                || $lower === 'mockery\\legacymockinterface'
+            ) {
+                continue;
+            }
+
+            $classes[$lower] = $candidate;
+        }
+
+        return array_values($classes);
+    }
+
+    /**
+     * Resolves class metadata for strict target validation, returning null when any target
+     * has an incomplete hierarchy, `@mixin`, `__call`, or `__callStatic`.
+     *
+     * @param non-empty-list<string> $targetClasses
+     * @return array<string, ClassLikeMetadata>|null
+     */
+    public static function resolveStrictTargetMetadata(array $targetClasses, Codebase $codebase): ?array
+    {
+        $metadataList = $codebase->getMultipleClassLikes($targetClasses);
+        $validMetadata = [];
+        $magicChecks = [];
+        foreach ($metadataList as $index => $meta) {
+            if (!$meta instanceof ClassLikeMetadata || $meta->hasIncompleteHierarchy() || $meta->mixins !== []) {
+                return null;
+            }
+
+            $className = $targetClasses[$index];
+            $validMetadata[$className] = $meta;
+            $magicChecks[] = new MemberIdentifier($className, '__call');
+            $magicChecks[] = new MemberIdentifier($className, '__callStatic');
+        }
+
+        foreach ($codebase->checkMultipleMethodsExist($magicChecks) as $hasMagic) {
+            if ($hasMagic) {
+                return null;
+            }
+        }
+
+        return $validMetadata;
+    }
+
+    /**
+     * @param non-empty-list<string> $targetClasses
+     * @param array<string, ClassLikeMetadata> $validMetadata
+     */
+    public static function methodExistsOnTargets(
+        array $targetClasses,
+        array $validMetadata,
+        string $methodName,
+        Codebase $codebase,
+    ): bool {
+        $lower = strtolower($methodName);
+        foreach ($validMetadata as $meta) {
+            foreach ($meta->pseudoMethods as $pseudo) {
+                if (strtolower($pseudo) === $lower) {
+                    return true;
+                }
+            }
+            foreach ($meta->staticPseudoMethods as $pseudo) {
+                if (strtolower($pseudo) === $lower) {
+                    return true;
+                }
+            }
+        }
+
+        $checks = [];
+        foreach ($targetClasses as $className) {
+            $checks[] = new MemberIdentifier($className, $methodName);
+        }
+
+        return in_array(true, $codebase->checkMultipleMethodsExist($checks), true);
     }
 }

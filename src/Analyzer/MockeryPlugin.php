@@ -61,8 +61,9 @@ final class MockeryPlugin implements Plugin
         $registry->registerEntryPoint(MethodTarget::exact('PHPUnit\\Framework\\TestCase', 'purgeMockeryContainer'));
 
         if ($this->isStrictMockedMethodsEnabled()) {
-            $registry->registerMethodCallAnalysisHook(new StrictMockedMethodHook(variadicMethods: true));
-            $registry->registerMethodCallAnalysisHook(new StrictMockedMethodHook(variadicMethods: false));
+            $registry->registerMethodCallAnalysisHook(new StrictMockedMethodHook(StrictMockedMethodHook::MODE_VARIADIC));
+            $registry->registerMethodCallAnalysisHook(new StrictMockedMethodHook(StrictMockedMethodHook::MODE_SINGLE));
+            $registry->registerMethodCallAnalysisHook(new StrictMockedMethodHook(StrictMockedMethodHook::MODE_HIGHER_ORDER));
         }
     }
 

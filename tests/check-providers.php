@@ -2,20 +2,31 @@
 
 declare(strict_types=1);
 
+use AlfredBez\MagoMockery\Analyzer\Providers\HigherOrderMessageProvider;
 use AlfredBez\MagoMockery\Analyzer\Providers\MockTypeFactory;
 use AlfredBez\MagoMockery\Analyzer\Providers\CompositeExpectationProvider;
+use AlfredBez\MagoMockery\Analyzer\Providers\NoArgumentFactoryProvider;
 use Mago\Sdk\Analyzer\Argument;
 use Mago\Sdk\Analyzer\CallableSignatureProviderContext;
 use Mago\Sdk\Analyzer\Codebase;
 use Mago\Sdk\Analyzer\Invocation;
 use Mago\Sdk\Analyzer\InvocationKind;
+use Mago\Sdk\Analyzer\Metadata\ClassLikeKind;
+use Mago\Sdk\Analyzer\Metadata\ClassLikeMetadata;
 use Mago\Sdk\Analyzer\Metadata\FunctionLikeMetadata;
 use Mago\Sdk\Analyzer\Metadata\MetadataFlags;
 use Mago\Sdk\Analyzer\Metadata\ParameterMetadata;
 use Mago\Sdk\Analyzer\Metadata\TypeMetadata;
+use Mago\Sdk\Analyzer\ReturnTypeProviderContext;
 use Mago\Sdk\Analyzer\Type;
+use Mago\Sdk\Analyzer\Type\ClassLikeStringKind;
+use Mago\Sdk\Analyzer\Type\ClassLikeStringType;
+use Mago\Sdk\Analyzer\Type\ClassLikeStringVariant;
 use Mago\Sdk\Analyzer\Type\FunctionLikeIdentifier;
 use Mago\Sdk\Analyzer\Type\FunctionLikeKind;
+use Mago\Sdk\Analyzer\Type\NamedObjectType;
+use Mago\Sdk\Analyzer\Type\ScalarType;
+use Mago\Sdk\Analyzer\Type\ScalarTypeKind;
 use Mago\Sdk\Analyzer\Type\Visibility;
 use Mago\Sdk\Analyzer\TypeComparator;
 use Mago\Sdk\Internal\Analyzer\MetadataCache;
@@ -157,5 +168,105 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
         $check((string) $andSet->parameters[1]->type === 'mixed' && $andSet->parameters[1]->variadic, 'andSet must accept mixed variadic values after caching.');
         $check($andSet->parameters[0]->name === '$name', 'An existing parameter dollar prefix must remain unchanged.');
     }
+
+    $typedClassString = Type::fromAtomic(new ScalarType(
+        ScalarTypeKind::ClassLikeString,
+        new ClassLikeStringType(
+            variant: ClassLikeStringVariant::OfType,
+            kind: ClassLikeStringKind::Class_,
+            constraint: new NamedObjectType('Alpha', null, null, false, false, null, false),
+        ),
+    ));
+    $bareClassString = Type::fromAtomic(new ScalarType(
+        ScalarTypeKind::ClassLikeString,
+        new ClassLikeStringType(variant: ClassLikeStringVariant::Any, kind: ClassLikeStringKind::Class_),
+    ));
+    $fromTypedClassString = MockTypeFactory::fromInvocation(
+        new Invocation(InvocationKind::StaticMethod, 'mock', 'Mockery', Type::namedObject('Mockery'), $span, [
+            new Argument(null, false, false, $span, '$cls', $typedClassString),
+        ]),
+        $codebase,
+    );
+    $check($targets($fromTypedClassString) === ['Alpha', 'Mockery\\MockInterface'], 'class-string<Alpha> must resolve to Alpha&MockInterface.');
+    $fromBareClassString = MockTypeFactory::fromInvocation(
+        new Invocation(InvocationKind::StaticMethod, 'mock', 'Mockery', Type::namedObject('Mockery'), $span, [
+            new Argument(null, false, false, $span, '$cls', $bareClassString),
+        ]),
+        $codebase,
+    );
+    $check($fromBareClassString === null, 'Bare class-string must stay unresolved.');
+
+    $cache->values[Protocol::GET_CLASS_LIKES << 4]['alpha'] = new ClassLikeMetadata(
+        name: 'Alpha',
+        originalName: 'Alpha',
+        kind: ClassLikeKind::Interface,
+        location: $location,
+        nameLocation: $location,
+        flags: new MetadataFlags(0),
+        directParentClass: null,
+        directParentInterfaces: [],
+        parentInterfaces: [],
+        parentClasses: [],
+        requiredExtends: [],
+        requiredImplements: [],
+        usedTraits: [],
+        unresolvedHierarchyDependencies: [],
+        methods: ['known'],
+        pseudoMethods: [],
+        staticPseudoMethods: [],
+        properties: [],
+        magicProperties: [],
+        constants: [],
+        enumCases: [],
+        children: null,
+        permittedInheritors: null,
+        templates: [],
+        attributes: [],
+        typeAliases: [],
+        mixins: [],
+        enumType: null,
+        sealedMethods: null,
+        sealedProperties: null,
+        availableVersions: [],
+    );
+    $cache->existence[256 | Protocol::EXISTS_METHOD]["alpha\0__call"] = false;
+    $cache->existence[256 | Protocol::EXISTS_METHOD]["alpha\0__callstatic"] = false;
+    $cache->existence[256 | Protocol::EXISTS_METHOD]["alpha\0known"] = true;
+    $cache->existence[256 | Protocol::EXISTS_METHOD]["alpha\0missing"] = false;
+
+    $noArg = new NoArgumentFactoryProvider();
+    $hoType = $noArg->getReturnType(new ReturnTypeProviderContext(
+        PHPVersion::fromParts(8, 4),
+        $codebase,
+        new Invocation(InvocationKind::InstanceMethod, 'shouldReceive', 'Mockery\\MockInterface', $fromTypedClassString, $span, []),
+        new TypeComparator($host, 1, $cancellation),
+        $cancellation,
+    ));
+    $higher = new HigherOrderMessageProvider();
+    $hoKnown = $higher->getReturnType(new ReturnTypeProviderContext(
+        PHPVersion::fromParts(8, 4),
+        $codebase,
+        new Invocation(InvocationKind::InstanceMethod, 'known', 'Mockery\\HigherOrderMessage', $hoType, $span, []),
+        new TypeComparator($host, 1, $cancellation),
+        $cancellation,
+    ));
+    $check($hoKnown !== null, 'Higher-order provider must resolve known methods on target class.');
+    $hoMissing = $higher->getReturnType(new ReturnTypeProviderContext(
+        PHPVersion::fromParts(8, 4),
+        $codebase,
+        new Invocation(InvocationKind::InstanceMethod, 'missing', 'Mockery\\HigherOrderMessage', $hoType, $span, []),
+        new TypeComparator($host, 1, $cancellation),
+        $cancellation,
+    ));
+    $check($hoMissing === null, 'Higher-order provider must leave unknown methods unresolved.');
+    $hoMissingSig = $higher->getCallableSignature(new CallableSignatureProviderContext(
+        PHPVersion::fromParts(8, 4),
+        $codebase,
+        new Invocation(InvocationKind::InstanceMethod, 'missing', 'Mockery\\HigherOrderMessage', $hoType, $span, []),
+        new TypeComparator($host, 1, $cancellation),
+        $cancellation,
+    ));
+    $check($hoMissingSig === null, 'Higher-order signature provider must leave unknown methods unresolved.');
+
     fwrite(STDOUT, "Provider type and signature checks passed.\n");
 })();

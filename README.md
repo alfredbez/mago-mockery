@@ -56,7 +56,7 @@ vendor/bin/mago analyze
 
 | Code | Level | What it reports |
 | --- | --- | --- |
-| `alfredbez/mockery/unknown-mocked-method` | error | A literal method name passed to `shouldReceive()`, `shouldNotReceive()`, `allows()`, `expects()`, `shouldHaveReceived()`, or `shouldNotHaveReceived()` does not exist on the mocked class. Opt-in with `MAGO_MOCKERY_STRICT_METHODS=1`. |
+| `alfredbez/mockery/unknown-mocked-method` | error | A literal or higher-order method name passed to `shouldReceive()`, `shouldNotReceive()`, `allows()`, `expects()`, `shouldHaveReceived()`, or `shouldNotHaveReceived()` does not exist on the mocked class. Opt-in with `MAGO_MOCKERY_STRICT_METHODS=1`. |
 
 The check also reads Demeter chain roots (`'user->name'`) and associative array map keys passed to `allows()` or `expects()`. It skips:
 
@@ -83,9 +83,9 @@ $mock->shouldReceive('handledByMagicCall');
 
 | Feature | What Mago knows |
 | --- | --- |
-| `Mockery::mock()`, `spy()`, `namedMock()`, `instanceMock()`, `Container::mock()` | `T&MockInterface`, or an intersection of every mocked interface. |
+| `Mockery::mock()`, `spy()`, `namedMock()`, `instanceMock()`, `Container::mock()` | `T&MockInterface` for literal targets, `class-string<T>`, and object partials, or an intersection of every mocked interface. |
 | Global `mock()`, `spy()`, and `namedMock()` helpers | The same return types as the static factories. |
-| `Mockery::fetchMock()` and `Container::fetchMock()` | `T&MockInterface`, or `null` when no mock is registered. |
+| `Mockery::fetchMock()` and `Container::fetchMock()` | `T&MockInterface`, or `null` when no mock is registered, including same-file `namedMock()` aliases and `class-string<T>`. |
 | Spec strings | Class, interface, and trait targets, `alias:` and `overload:` prefixes, partial lists (`Foo[m1, m2]`, `Foo[!m1]`), comma and pipe separated interfaces, constructor argument arrays, quick definition maps, setup closures, and object partials. |
 | `shouldReceive()`, `shouldNotReceive()`, `allows()`, `expects()` | `CompositeExpectation` carrying the mocked type. |
 | Forwarded `Expectation` methods | Parameter types, including non-negative indexes for `andReturnArg()`, variadic mixed values for `andSet()`, and `array` or `Closure` for `VerificationDirector::withArgs()`. |
@@ -101,6 +101,7 @@ $mock->shouldReceive('handledByMagicCall');
 - Calling a `protected` method directly on a mock after `->makePartial()->shouldAllowMockingProtectedMethods()` reports Mago's own `invalid-method-access`, or `non-documented-method` when the class defines `__call`. Mago `1.60.2` through `1.61.0` does not expose receiver types to `IssueFilterContext`, so the extension does not filter those diagnostics. Filtering by source text would also hide real visibility bugs on non-mocks.
 - `shouldIgnoreMissing($returnValue, $recursive)` has a signature mismatch in Mockery itself. `LegacyMockInterface::shouldIgnoreMissing()` declares one parameter, while `Mockery\Mock` accepts a second `$recursive` parameter.
 - Literal method names are only checked when `MAGO_MOCKERY_STRICT_METHODS=1` is set. Without it, a call such as `shouldReceive('doesNotExist')` is not reported.
+- In strict mode, the analyzer reports an unknown mocked method unless a `shouldAllowMockingMethod()` call on the same mock identity dominates the expectation without a reassignment or unmerged branch split.
 
 ## Development
 

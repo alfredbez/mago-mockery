@@ -6,11 +6,14 @@ use AlfredBez\MagoMockery\Analyzer\Providers\HigherOrderMessageProvider;
 use AlfredBez\MagoMockery\Analyzer\Providers\MockTypeFactory;
 use AlfredBez\MagoMockery\Analyzer\Providers\CompositeExpectationProvider;
 use AlfredBez\MagoMockery\Analyzer\Providers\NoArgumentFactoryProvider;
+use AlfredBez\MagoMockery\Analyzer\Providers\TraitMockConstantIssueFilter;
 use Mago\Sdk\Analyzer\Argument;
 use Mago\Sdk\Analyzer\CallableSignatureProviderContext;
 use Mago\Sdk\Analyzer\Codebase;
 use Mago\Sdk\Analyzer\Invocation;
 use Mago\Sdk\Analyzer\InvocationKind;
+use Mago\Sdk\Analyzer\IssueFilterContext;
+use Mago\Sdk\Analyzer\IssueFilterDecision;
 use Mago\Sdk\Analyzer\Metadata\ClassLikeKind;
 use Mago\Sdk\Analyzer\Metadata\ClassLikeMetadata;
 use Mago\Sdk\Analyzer\Metadata\FunctionLikeMetadata;
@@ -36,6 +39,10 @@ use Mago\Sdk\Internal\Io\ResourceWriter;
 use Mago\Sdk\Internal\Protocol\FrameCodec;
 use Mago\Sdk\Internal\SignalCancellationToken;
 use Mago\Sdk\PHPVersion;
+use Mago\Sdk\Reporting\Annotation;
+use Mago\Sdk\Reporting\AnnotationKind;
+use Mago\Sdk\Reporting\Level;
+use Mago\Sdk\Reporting\ReportedIssue;
 use Mago\Sdk\SourceLocation;
 use Mago\Sdk\Span;
 
@@ -267,6 +274,171 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
         $cancellation,
     ));
     $check($hoMissingSig === null, 'Higher-order signature provider must leave unknown methods unresolved.');
+
+    $traitFilter = new TraitMockConstantIssueFilter();
+    $filterDecision = static function (string $code, string $needle) use ($traitFilter, $codebase, $host, $cancellation): IssueFilterDecision {
+        $pos = strrpos($code, $needle);
+        if ($pos === false) {
+            throw new RuntimeException("Needle not found in filter check: {$needle}");
+        }
+        $issueSpan = new Span($pos, $pos + strlen($needle));
+        $issue = new ReportedIssue(
+            level: Level::Error,
+            code: 'direct-trait-constant-access',
+            message: 'Cannot access trait constant directly.',
+            notes: [],
+            help: null,
+            link: null,
+            annotations: [new Annotation(AnnotationKind::Primary, $issueSpan, 'trait')],
+            edits: [],
+        );
+
+        return $traitFilter->filterIssue(new IssueFilterContext(
+            PHPVersion::fromParts(8, 3),
+            $codebase,
+            new TypeComparator($host, 1, $cancellation),
+            $cancellation,
+            'tests/check-providers.php',
+            $code,
+            $issue,
+        ));
+    };
+
+    $check(
+        $filterDecision('<?php use Mockery; function f(bool $b) { $v = T::class; if ($b) { $v = Mockery::mock(T::class); } return $v::TAG; }', '$v::TAG') === IssueFilterDecision::Keep,
+        'Conditional mock over plain trait class-string must keep diagnostic.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f(bool $b) { if ($b) { $v = Mockery::mock(T::class); } else { $v = Mockery::spy(T::class); } return $v::TAG; }', '$v::TAG') === IssueFilterDecision::Remove,
+        'Dominated mock across all branches must suppress diagnostic.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); $a = &$m; return $a::TAG; }', '$a::TAG') === IssueFilterDecision::Remove,
+        'By-reference mock alias must suppress diagnostic.',
+    );
+    $check(
+        $filterDecision('<?php function f() { $p = T::class; $a = &$p; return $a::TAG; }', '$a::TAG') === IssueFilterDecision::Keep,
+        'By-reference non-mock alias must keep diagnostic.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); $a = &$m; $m = T::class; return $a::TAG; }', '$a::TAG') === IssueFilterDecision::Keep,
+        'By-reference alias invalidated via original must keep diagnostic.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $a = Mockery::mock(T::class); $b = &$a; $a = &$b; return $b::TAG; }', '$b::TAG') === IssueFilterDecision::Remove,
+        'Reference cycle on mock must terminate and suppress diagnostic.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f(bool $c) { $a = Mockery::mock(T::class); $b = Mockery::mock(T::class); if ($c) { $b = &$a; } $a = T::class; return $b::TAG; }', '$b::TAG') === IssueFilterDecision::Keep,
+        'Conditional by-reference alias invalidated through original must keep diagnostic.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f(bool $c) { $ct = Mockery::getContainer(); if ($c) { $ct = new Fake(); } $m = $ct->mock(T::class); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Conditionally overwritten Container variable must keep diagnostic.',
+    );
+
+    $fnBucket = Protocol::GET_FUNCTIONS << 4;
+    $makeFunction = static function (string $name, array $parameters) use ($location): FunctionLikeMetadata {
+        return new FunctionLikeMetadata(
+            identifier: new FunctionLikeIdentifier(FunctionLikeKind::Function_, $name, null),
+            kind: \Mago\Sdk\Analyzer\Metadata\FunctionLikeKind::Function_,
+            name: $name,
+            originalName: $name,
+            location: $location,
+            nameLocation: $location,
+            parameters: $parameters,
+            declaredReturnType: null,
+            returnType: null,
+            templates: [],
+            attributes: [],
+            thrownTypes: [],
+            assertions: [],
+            ifTrueAssertions: [],
+            ifFalseAssertions: [],
+            assertionsInferred: false,
+            globalsAccessed: [],
+            hasDocblock: false,
+            flags: new MetadataFlags(0),
+            availableVersions: [],
+            visibility: null,
+            final: false,
+            abstract: false,
+            static: false,
+            constructor: false,
+            whereConstraints: [],
+        );
+    };
+    $cache->values[$fnBucket]['overwrite'] = $makeFunction('overwrite', [$parameter('x', Type::mixed(), MetadataFlags::BY_REFERENCE)]);
+    $cache->values[$fnBucket]['inspect'] = $makeFunction('inspect', [$parameter('x', Type::mixed())]);
+
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); overwrite($m); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'By-reference function call must invalidate receiver mock guarantee.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); inspect($m); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Remove,
+        'By-value function call must preserve receiver mock guarantee.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f(callable $fn) { $m = Mockery::mock(T::class); $fn($m); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Unresolved dynamic callable must conservatively invalidate variable arguments.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f($o) { $m = T::class; $o?->accept($m = Mockery::mock(T::class)); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Nullsafe call argument assignment must not produce an unconditional mock guarantee.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f(bool $flag) { $m = Mockery::mock(T::class); $flag ? $m = T::class : null; return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Unparenthesized assignment inside ternary branch must invalidate receiver.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); return match (T::class) { ($m = T::class) => $m::TAG }; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Match-arm condition assignment must apply before arm result.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); $box = []; $box[0] = &$m; $box[0] = T::class; return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Reference escaped into array element must invalidate on array write.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $box = [T::class]; foreach ($box as &$v) {} $v = Mockery::mock(T::class); $box[0] = T::class; return $v::TAG; }', '$v::TAG') === IssueFilterDecision::Keep,
+        'Foreach by-reference variable must remain escaped across reassignment.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $reset = function () use (&$m) { $m = T::class; }; $m = Mockery::mock(T::class); $reset(); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Closure by-reference capture must invalidate escaped cell on subsequent invocation.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); $xs = []; unset($xs[$m = T::class]); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Complex unset target must evaluate index assignment side effects.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); for ($i = 0; $i < 2; ++$i) { $m::TAG; new class($m = T::class) { public function __construct($ignored) {} }; } }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Loop write scan must inspect anonymous-class constructor arguments.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); overwrite(($m)); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Parenthesized by-reference function argument must invalidate receiver mock guarantee.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); $a = &$m; try { mayThrow(); } catch (\Throwable $a) { $a = T::class; } return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Catch variable sharing a reference cell must invalidate aliased mock.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f($o) { $m = Mockery::mock(T::class); for ($i = 0; $i < 2; ++$i) { $m::TAG; $o->with($m); } }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Loop write scan must not exempt arbitrary with() calls from by-reference invalidation.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f($x) { $m = Mockery::mock(T::class); isset($x) === ($m = T::class); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Trailing comparison operand after isset() must execute assignment side effects.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f(array $a) { $m = T::class; $nil = null; isset($nil, $a[($m = Mockery::mock(T::class)) ? 0 : 1]); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Short-circuited trailing isset() argument must not produce an unconditional mock guarantee.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; $m = Mockery::mock(T::class); $GLOBALS[\'m\'] = T::class; $x = $m::TAG;', '$m::TAG') === IssueFilterDecision::Keep,
+        'File-scope $GLOBALS write must invalidate top-level mock guarantee.',
+    );
 
     fwrite(STDOUT, "Provider type and signature checks passed.\n");
 })();

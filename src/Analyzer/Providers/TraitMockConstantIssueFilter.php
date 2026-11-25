@@ -8,29 +8,17 @@ use Mago\Sdk\Analyzer\IssueFilterContext;
 use Mago\Sdk\Analyzer\IssueFilterDecision;
 use Mago\Sdk\Analyzer\IssueFilterHook;
 use Mago\Sdk\Reporting\AnnotationKind;
+use PhpToken;
 
-use function array_key_last;
-use function ltrim;
-use function preg_match;
-use function preg_match_all;
-use function preg_quote;
-use function rtrim;
-use function str_starts_with;
+use function count;
 use function strlen;
-use function substr;
-use function trim;
 
 /**
  * Suppresses Mago's native `direct-trait-constant-access` when a constant is accessed
- * through a Mockery trait mock (variable, container mock, or parenthesized factory expression)
- * rather than the literal trait name or a plain class-string variable.
+ * through a receiver guaranteed on every reachable path to be a Mockery mock object.
  */
 final class TraitMockConstantIssueFilter implements IssueFilterHook
 {
-    private const DIRECT_FACTORY_PREFIX = '/^(?:\\\\?Mockery::(?:mock|spy|namedMock|instanceMock)|(?:mock|spy|namedMock)|\\\\?Mockery::getContainer\s*\(\s*\)\s*->\s*(?:mock|spy|namedMock|instanceMock))\s*\(/i';
-    private const ALIASED_FACTORY_PREFIX = '/^([A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)::(?:mock|spy|namedMock|instanceMock|getContainer\s*\(\s*\)\s*->\s*(?:mock|spy|namedMock|instanceMock))\s*\(/i';
-    private const CONTAINER_CALL_PREFIX = '/^(\$[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)\s*->\s*(?:mock|spy|namedMock|instanceMock)\s*\(/i';
-
     public function getCodes(): array
     {
         return ['direct-trait-constant-access'];
@@ -50,287 +38,90 @@ final class TraitMockConstantIssueFilter implements IssueFilterHook
             return IssueFilterDecision::Keep;
         }
 
-        $rawExpr = trim(substr($context->contents, $primarySpan->start, $primarySpan->end - $primarySpan->start));
-        $after = ltrim(substr($context->contents, $primarySpan->end, 16));
-
-        $targetExpr = self::extractConstantReceiver($rawExpr, $after);
-        if ($targetExpr === null) {
+        $tokens = self::tokenizeCode($context->contents);
+        if ($tokens === []) {
             return IssueFilterDecision::Keep;
         }
 
-        $prefix = substr($context->contents, 0, $primarySpan->start);
-        $cleanPrefix = self::stripComments($prefix);
-        $unwrapped = self::stripOuterParens($targetExpr);
-        if (self::isFactoryCallExpression($unwrapped, $cleanPrefix)) {
-            return IssueFilterDecision::Remove;
+        $receiverRange = self::extractReceiverTokenRange($tokens, $primarySpan->start, $primarySpan->end);
+        if ($receiverRange === null) {
+            return IssueFilterDecision::Keep;
         }
 
-        if (preg_match('/^\$[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*$/', $unwrapped) === 1) {
-            if (self::isLatestAssignmentMockInScope($cleanPrefix, $unwrapped)) {
-                return IssueFilterDecision::Remove;
-            }
+        [$receiverStart, $receiverEnd] = $receiverRange;
+        if (TraitMockFlowAnalyzer::isGuaranteedMockReceiver(
+            $tokens,
+            $receiverStart,
+            $receiverEnd,
+            $primarySpan->start,
+            $context->codebase,
+        )) {
+            return IssueFilterDecision::Remove;
         }
 
         return IssueFilterDecision::Keep;
     }
 
-    private static function extractConstantReceiver(string $expr, string $after): ?string
+    /**
+     * @return list<PhpToken>
+     */
+    private static function tokenizeCode(string $contents): array
     {
-        if ($expr === '') {
-            return null;
-        }
-
-        $pos = self::findTopLevelDoubleColon($expr);
-        if ($pos !== null) {
-            return trim(substr($expr, 0, $pos));
-        }
-
-        if (str_starts_with($after, '::')) {
-            return $expr;
-        }
-
-        return null;
-    }
-
-    private static function findTopLevelDoubleColon(string $expr): ?int
-    {
-        $depth = 0;
-        $len = strlen($expr);
-        $inSingle = false;
-        $inDouble = false;
-        for ($i = 0; $i < $len - 1; ++$i) {
-            $ch = $expr[$i];
-            if ($inSingle) {
-                if ($ch === '\\') {
-                    ++$i;
-                } elseif ($ch === "'") {
-                    $inSingle = false;
-                }
+        $tokens = [];
+        foreach (PhpToken::tokenize($contents) as $token) {
+            if ($token->id === T_WHITESPACE || $token->id === T_COMMENT || $token->id === T_DOC_COMMENT) {
                 continue;
             }
-            if ($inDouble) {
-                if ($ch === '\\') {
-                    ++$i;
-                } elseif ($ch === '"') {
-                    $inDouble = false;
-                }
-                continue;
-            }
-            if ($ch === "'") {
-                $inSingle = true;
-            } elseif ($ch === '"') {
-                $inDouble = true;
-            } elseif ($ch === '(' || $ch === '[' || $ch === '{') {
-                ++$depth;
-            } elseif ($ch === ')' || $ch === ']' || $ch === '}') {
-                if ($depth > 0) {
-                    --$depth;
-                }
-            } elseif ($depth === 0 && $ch === ':' && $expr[$i + 1] === ':') {
-                return $i;
-            }
+            $tokens[] = $token;
         }
 
-        return null;
-    }
-
-    private static function stripOuterParens(string $expr): string
-    {
-        $expr = trim($expr);
-        while (strlen($expr) >= 2 && $expr[0] === '(' && $expr[-1] === ')') {
-            $depth = 0;
-            $wrapsWhole = true;
-            $len = strlen($expr);
-            for ($i = 0; $i < $len - 1; ++$i) {
-                if ($expr[$i] === '(') {
-                    ++$depth;
-                } elseif ($expr[$i] === ')') {
-                    --$depth;
-                    if ($depth === 0) {
-                        $wrapsWhole = false;
-                        break;
-                    }
-                }
-            }
-            if (!$wrapsWhole) {
-                break;
-            }
-            $expr = trim(substr($expr, 1, -1));
-        }
-
-        return $expr;
-    }
-
-    private static function isFactoryCallExpression(string $expr, string $cleanFilePrefix): bool
-    {
-        $trimmed = ltrim($expr);
-        if (preg_match(self::DIRECT_FACTORY_PREFIX, $trimmed) === 1) {
-            return true;
-        }
-
-        if (preg_match(self::ALIASED_FACTORY_PREFIX, $trimmed, $aliasMatch) === 1) {
-            $alias = preg_quote($aliasMatch[1], '/');
-            if (preg_match('/\buse\s+\\\\?Mockery\s+as\s+' . $alias . '\s*;/i', $cleanFilePrefix) === 1) {
-                return true;
-            }
-        }
-
-        if (preg_match(self::CONTAINER_CALL_PREFIX, $trimmed, $containerMatch) === 1) {
-            return self::isMockeryContainerVariable($cleanFilePrefix, $containerMatch[1]);
-        }
-
-        return false;
-    }
-
-    private static function isMockeryContainerVariable(string $cleanFilePrefix, string $var): bool
-    {
-        $containerAliases = ['\\\\?Mockery\\\\Container'];
-        if (preg_match('/\buse\s+\\\\?Mockery\\\\Container\s*;/i', $cleanFilePrefix) === 1) {
-            $containerAliases[] = 'Container';
-        }
-        if (preg_match_all('/\buse\s+\\\\?Mockery\\\\Container\s+as\s+([A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)\s*;/i', $cleanFilePrefix, $aliasMatches) >= 1) {
-            foreach ($aliasMatches[1] as $alias) {
-                $containerAliases[] = preg_quote($alias, '/');
-            }
-        }
-        $typePattern = '(?:' . implode('|', $containerAliases) . ')';
-
-        $scope = self::enclosingFunctionSlice($cleanFilePrefix);
-        $varQuoted = preg_quote($var, '/');
-
-        // Check latest assignment in enclosing function scope first.
-        $assignPattern = '/(?<![A-Za-z0-9_])' . $varQuoted . '\s*=(?!=)\s*([^;]+)/';
-        if (preg_match_all($assignPattern, $scope, $matches) >= 1) {
-            $lastRhs = self::stripOuterParens(trim($matches[1][array_key_last($matches[1])]));
-            if (preg_match('/^(?:new\s+' . $typePattern . '\b|\\\\?Mockery::getContainer\s*\()/i', $lastRhs) === 1) {
-                return true;
-            }
-            if (preg_match('/^([A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)::getContainer\s*\(/i', $lastRhs, $m) === 1) {
-                return preg_match('/\buse\s+\\\\?Mockery\s+as\s+' . preg_quote($m[1], '/') . '\s*;/i', $cleanFilePrefix) === 1;
-            }
-
-            return false;
-        }
-
-        // Check enclosing function parameter type hint (e.g. `Container $container`).
-        $bracePos = strpos($scope, '{');
-        $header = $bracePos !== false ? substr($scope, 0, $bracePos) : $scope;
-        if (preg_match('/(?<![A-Za-z0-9_\\\\])' . $typePattern . '\s+' . $varQuoted . '(?![A-Za-z0-9_])/i', $header) === 1) {
-            return true;
-        }
-
-        return false;
+        return $tokens;
     }
 
     /**
-     * Checks whether the most recent assignment to `$var` in the enclosing function scope
-     * produces a Mockery mock (directly or through a plain variable alias), invalidating
-     * stale mock assignments once `$var` is reassigned to anything else.
+     * @param list<PhpToken> $tokens
+     * @return ?array{0: int, 1: int}
      */
-    private static function isLatestAssignmentMockInScope(string $cleanFilePrefix, string $var): bool
+    private static function extractReceiverTokenRange(array $tokens, int $spanStart, int $spanEnd): ?array
     {
-        $scopeOffset = 0;
-        $scope = self::enclosingFunctionSlice($cleanFilePrefix, $scopeOffset);
+        $count = count($tokens);
+        $first = null;
+        $last = null;
 
-        $visited = [];
-        $currentVar = $var;
-        $cursor = $scope;
-        while (!isset($visited[$currentVar])) {
-            $visited[$currentVar] = true;
-            $pattern = '/(?<![A-Za-z0-9_])' . preg_quote($currentVar, '/') . '\s*=(?!=)\s*([^;]+)/';
-            if (preg_match_all($pattern, $cursor, $matches, PREG_OFFSET_CAPTURE) < 1) {
-                return false;
-            }
-
-            $lastIndex = array_key_last($matches[1]);
-            $assignOffset = $matches[0][$lastIndex][1];
-            $rhs = self::stripOuterParens(trim($matches[1][$lastIndex][0]));
-            $prefixAtAssign = substr($cleanFilePrefix, 0, $scopeOffset + $assignOffset);
-            if (self::isFactoryCallExpression($rhs, $prefixAtAssign)) {
-                return true;
-            }
-
-            if (preg_match('/^(\$[A-Za-z_\x80-\xff][A-Za-z0-9_\x80-\xff]*)$/', $rhs, $aliasMatch) === 1) {
-                $cursor = substr($cursor, 0, $assignOffset);
-                $currentVar = $aliasMatch[1];
+        for ($i = 0; $i < $count; ++$i) {
+            $tok = $tokens[$i];
+            $tokEnd = $tok->pos + strlen($tok->text);
+            if ($tokEnd <= $spanStart) {
                 continue;
             }
-
-            return false;
+            if ($tok->pos >= $spanEnd) {
+                break;
+            }
+            $first ??= $i;
+            $last = $i + 1;
         }
 
-        return false;
-    }
-
-    private static function enclosingFunctionSlice(string $clean, int &$offset = 0): string
-    {
-        if (preg_match_all('/\bfunction\b[^{]*\{/', $clean, $fnMatches, PREG_OFFSET_CAPTURE) >= 1) {
-            $lastFn = $fnMatches[0][array_key_last($fnMatches[0])];
-            $offset = (int) $lastFn[1];
-
-            return substr($clean, $offset);
+        if ($first === null || $last === null) {
+            return null;
         }
 
-        $offset = 0;
-
-        return $clean;
-    }
-
-    private static function stripComments(string $code): string
-    {
-        $out = '';
-        $len = strlen($code);
-        $i = 0;
-        while ($i < $len) {
-            $ch = $code[$i];
-            $next = $i + 1 < $len ? $code[$i + 1] : '';
-
-            if ($ch === "'" || $ch === '"') {
-                $quote = $ch;
-                $out .= $quote;
-                ++$i;
-                while ($i < $len) {
-                    $c = $code[$i];
-                    ++$i;
-                    if ($c === '\\' && $i < $len) {
-                        ++$i;
-                    } elseif ($c === $quote) {
-                        break;
-                    }
-                }
-                $out .= $quote;
-                continue;
+        for ($i = $first; $i < $last; ++$i) {
+            $tok = $tokens[$i];
+            if ($tok->text === '(') {
+                $i = TraitMockFlowAnalyzer::findMatchingClose($tokens, $i, '(', ')');
+            } elseif ($tok->text === '[' || $tok->id === T_ATTRIBUTE) {
+                $i = TraitMockFlowAnalyzer::findMatchingClose($tokens, $i, '[', ']');
+            } elseif ($tok->text === '{' || $tok->id === T_CURLY_OPEN || $tok->id === T_DOLLAR_OPEN_CURLY_BRACES) {
+                $i = TraitMockFlowAnalyzer::findMatchingClose($tokens, $i, '{', '}');
+            } elseif ($tok->id === T_DOUBLE_COLON) {
+                return $i > $first ? [$first, $i] : null;
             }
-
-            if ($ch === '/' && $next === '/') {
-                $i += 2;
-                while ($i < $len && $code[$i] !== "\n") {
-                    ++$i;
-                }
-                continue;
-            }
-
-            if ($ch === '#' && $next !== '[') {
-                ++$i;
-                while ($i < $len && $code[$i] !== "\n") {
-                    ++$i;
-                }
-                continue;
-            }
-
-            if ($ch === '/' && $next === '*') {
-                $i += 2;
-                while ($i < $len - 1 && !($code[$i] === '*' && $code[$i + 1] === '/')) {
-                    ++$i;
-                }
-                $i += 2;
-                continue;
-            }
-
-            $out .= $ch;
-            ++$i;
         }
 
-        return rtrim($out);
+        if ($last < $count && $tokens[$last]->id === T_DOUBLE_COLON) {
+            return [$first, $last];
+        }
+
+        return null;
     }
 }

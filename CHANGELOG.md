@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.2] - 2026-11-25
+
+### Fixed
+
+- Trait constant access filtering enforces intra-procedural path dominance so conditional mock assignments with a reachable non-mock path retain Mago's `direct-trait-constant-access` diagnostic, while dominated mocks across straight-line code, both branches, and post-conditional reassignments stay clean.
+- Trait constant access filtering tracks by-reference aliases (`$alias = &$mock`), reference-group invalidation, `unset()` detachment, reference cycles, escaped references, and by-reference call arguments so valid mock aliases no longer emit `direct-trait-constant-access` while non-mock and invalidated aliases keep the diagnostic.
+
 ## [0.1.1] - 2026-11-24
 
 ### Fixed

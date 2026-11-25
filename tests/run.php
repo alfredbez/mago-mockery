@@ -44,6 +44,13 @@ $expected = [
         'tests/fixtures/MockSpecs.php' => [],
         'tests/fixtures/Positive.php' => [],
         'tests/fixtures/TraitConstantDominanceAndAliases.php' => [],
+        'tests/fixtures/TraitConstantProvenance.php' => [
+            'deprecated-method' => 2,
+            'mixed-assignment' => 2,
+            'mixed-return-statement' => 2,
+            'non-existent-method' => 1,
+            'redundant-null-coalesce' => 3,
+        ],
         'tests/fixtures/Wave9FactoriesAndTraits.php' => [],
         'tests/fixtures/IntersectionControl.php' => [
             'invalid-argument' => 1,
@@ -51,6 +58,11 @@ $expected = [
         'tests/fixtures/TraitConstantDominanceAndAliasesNegative.php' => [
             'direct-trait-constant-access' => 28,
             'reference-reused-from-confusing-scope' => 1,
+        ],
+        'tests/fixtures/TraitConstantProvenanceNegative.php' => [
+            'deprecated-method' => 1,
+            'direct-trait-constant-access' => 44,
+            'redundant-null-coalesce' => 4,
         ],
         'tests/fixtures/Wave9FactoriesAndTraitsNegative.php' => [
             'direct-trait-constant-access' => 3,
@@ -112,6 +124,26 @@ $expected = [
             'possibly-invalid-argument' => 2,
             'reference-reused-from-confusing-scope' => 1,
         ],
+        'tests/fixtures/TraitConstantProvenance.php' => [
+            'deprecated-method' => 2,
+            'direct-trait-constant-access' => 3,
+            'impossible-assignment' => version_compare($versionMatch[1], '1.61.0', '>=') ? 1 : 4,
+            'mixed-assignment' => 2,
+            'mixed-return-statement' => 2,
+            'never-return' => version_compare($versionMatch[1], '1.61.0', '>=') ? 19 : 21,
+            'non-existent-class-constant' => 22,
+            'non-existent-method' => 1,
+            'redundant-null-coalesce' => 3,
+        ],
+        'tests/fixtures/TraitConstantProvenanceNegative.php' => [
+            'deprecated-method' => 1,
+            'direct-trait-constant-access' => 20,
+            'mixed-assignment' => 1,
+            'non-existent-class-constant' => 23,
+            'non-existent-method' => 1,
+            'possibly-invalid-argument' => 1,
+            'redundant-null-coalesce' => 4,
+        ],
         'tests/fixtures/Wave9FactoriesAndTraits.php' => [
             'impossible-assignment' => 5,
             'non-documented-method' => 8,
@@ -155,6 +187,18 @@ foreach ([
         'direct-trait-constant-access' => 28,
         'reference-reused-from-confusing-scope' => 1,
     ],
+    'tests/fixtures/TraitConstantProvenance.php' => [
+        'deprecated-method' => 2,
+        'mixed-assignment' => 2,
+        'mixed-return-statement' => 2,
+        'non-existent-method' => 1,
+        'redundant-null-coalesce' => 3,
+    ],
+    'tests/fixtures/TraitConstantProvenanceNegative.php' => [
+        'deprecated-method' => 1,
+        'direct-trait-constant-access' => 44,
+        'redundant-null-coalesce' => 4,
+    ],
 ] as $fixtureFile => $expectedCounts) {
     $strictSubset = array_values(array_filter(
         $withStrict,
@@ -163,22 +207,27 @@ foreach ([
     $failures += assertHistograms('with extension (strict)', $strictSubset, [$fixtureFile => $expectedCounts]);
 }
 
-foreach ([34, 43, 54, 61, 69, 77, 85, 96, 103, 112, 119, 129, 136, 143, 150, 160, 170, 181, 191, 198] as $expectedLine) {
-    $found = 0;
-    foreach ($with as $issue) {
-        if (
-            $issue['file'] === 'tests/fixtures/TraitConstantDominanceAndAliasesNegative.php'
-            && $issue['code'] === 'direct-trait-constant-access'
-            && $issue['line'] === $expectedLine
-        ) {
-            $found++;
+foreach ([
+    'tests/fixtures/TraitConstantDominanceAndAliasesNegative.php' => [34, 43, 54, 61, 69, 77, 85, 96, 103, 112, 119, 129, 136, 143, 150, 160, 170, 181, 191, 198],
+    'tests/fixtures/TraitConstantProvenanceNegative.php' => [74, 96, 105, 118, 128, 136, 144, 156, 163, 172, 185, 198, 205, 217, 223, 230, 236, 243, 250, 257, 264, 273, 280, 291, 307, 319, 335, 345, 353, 369, 385, 402],
+] as $negativeFile => $expectedLines) {
+    foreach ($expectedLines as $expectedLine) {
+        $found = 0;
+        foreach ($with as $issue) {
+            if (
+                $issue['file'] === $negativeFile
+                && $issue['code'] === 'direct-trait-constant-access'
+                && $issue['line'] === $expectedLine
+            ) {
+                $found++;
+            }
         }
-    }
-    if ($found >= 1) {
-        fwrite(STDOUT, "ok  with extension  tests/fixtures/TraitConstantDominanceAndAliasesNegative.php:{$expectedLine}  direct-trait-constant-access = {$found}\n");
-    } else {
-        $failures++;
-        fwrite(STDERR, "FAIL with extension  tests/fixtures/TraitConstantDominanceAndAliasesNegative.php:{$expectedLine}  expected >= 1 direct-trait-constant-access, actual 0\n");
+        if ($found >= 1) {
+            fwrite(STDOUT, "ok  with extension  {$negativeFile}:{$expectedLine}  direct-trait-constant-access = {$found}\n");
+        } else {
+            $failures++;
+            fwrite(STDERR, "FAIL with extension  {$negativeFile}:{$expectedLine}  expected >= 1 direct-trait-constant-access, actual 0\n");
+        }
     }
 }
 

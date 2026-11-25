@@ -9,8 +9,8 @@ use function count;
 use function implode;
 
 /**
- * @phpstan-type CellValue array{mock: bool, container: bool}
- * @phpstan-type CellRecord array{mock: bool, container: bool, escaped: bool}
+ * @phpstan-type CellValue array{mock: bool, container: bool, null: bool, mockOrNull: bool}
+ * @phpstan-type CellRecord array{mock: bool, container: bool, null: bool, mockOrNull: bool, escaped: bool, staticLocal: bool}
  */
 final class TraitMockAliasState
 {
@@ -30,19 +30,25 @@ final class TraitMockAliasState
     /** @return CellValue */
     public static function unknownValue(): array
     {
-        return ['mock' => false, 'container' => false];
+        return ['mock' => false, 'container' => false, 'null' => false, 'mockOrNull' => false];
     }
 
     /** @return CellValue */
     public static function mockValue(): array
     {
-        return ['mock' => true, 'container' => false];
+        return ['mock' => true, 'container' => false, 'null' => false, 'mockOrNull' => true];
     }
 
     /** @return CellValue */
     public static function containerValue(): array
     {
-        return ['mock' => false, 'container' => true];
+        return ['mock' => false, 'container' => true, 'null' => false, 'mockOrNull' => false];
+    }
+
+    /** @return CellValue */
+    public static function nullValue(): array
+    {
+        return ['mock' => false, 'container' => false, 'null' => true, 'mockOrNull' => true];
     }
 
     /**
@@ -55,6 +61,8 @@ final class TraitMockAliasState
         return [
             'mock' => $a['mock'] && $b['mock'],
             'container' => $a['container'] && $b['container'],
+            'null' => $a['null'] && $b['null'],
+            'mockOrNull' => $a['mockOrNull'] && $b['mockOrNull'],
         ];
     }
 
@@ -66,26 +74,29 @@ final class TraitMockAliasState
             return self::unknownValue();
         }
 
-        $cell = $this->cells[$cellId];
-
-        return ['mock' => $cell['mock'], 'container' => $cell['container']];
+        return self::extractValue($this->cells[$cellId]);
     }
 
     /** @param CellValue $value */
     public function assignValue(string $varName, array $value): void
     {
         $cellId = $this->ensureCell($varName);
-        $this->cells[$cellId]['mock'] = $value['mock'];
-        $this->cells[$cellId]['container'] = $value['container'];
+        $this->setCellValue($cellId, $value);
 
         foreach (array_keys($this->mayRefs[$varName] ?? []) as $peer) {
             $peerCellId = $this->vars[$peer] ?? null;
             if ($peerCellId === null || $peerCellId === $cellId || !isset($this->cells[$peerCellId])) {
                 continue;
             }
-            $this->cells[$peerCellId]['mock'] = $this->cells[$peerCellId]['mock'] && $value['mock'];
-            $this->cells[$peerCellId]['container'] = $this->cells[$peerCellId]['container'] && $value['container'];
+            $this->setCellValue($peerCellId, self::meetValue(self::extractValue($this->cells[$peerCellId]), $value));
         }
+    }
+
+    /** @param CellValue $value */
+    public function refineCellValue(string $varName, array $value): void
+    {
+        $cellId = $this->ensureCell($varName);
+        $this->setCellValue($cellId, $value);
     }
 
     public function assignByRef(string $lhsVar, ?string $rhsVar): void
@@ -109,7 +120,7 @@ final class TraitMockAliasState
 
         if ($rhsVar === null) {
             $cellId = $this->nextCell++;
-            $this->cells[$cellId] = ['mock' => false, 'container' => false, 'escaped' => true];
+            $this->cells[$cellId] = self::makeCell(self::unknownValue(), true, false);
             $this->vars[$lhsVar] = $cellId;
 
             return;
@@ -123,6 +134,40 @@ final class TraitMockAliasState
                 $this->addMayRef($lhsVar, $peer);
             }
         }
+    }
+
+    public function bindStaticLocal(string $varName): void
+    {
+        $this->detachMayRefs($varName);
+        unset($this->vars[$varName]);
+
+        $cellId = $this->nextCell++;
+        $this->cells[$cellId] = self::makeCell(self::unknownValue(), false, true);
+        $this->vars[$varName] = $cellId;
+    }
+
+    public function markStaticLocal(string $varName): void
+    {
+        $cellId = $this->ensureCell($varName);
+        $this->cells[$cellId]['staticLocal'] = true;
+
+        foreach (array_keys($this->mayRefs[$varName] ?? []) as $peer) {
+            $peerCellId = $this->vars[$peer] ?? null;
+            if ($peerCellId !== null && isset($this->cells[$peerCellId])) {
+                $this->cells[$peerCellId]['staticLocal'] = true;
+            }
+        }
+    }
+
+    public function hasStaticLocalCells(): bool
+    {
+        foreach ($this->cells as $cell) {
+            if ($cell['staticLocal']) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public function markEscaped(string $varName): void
@@ -140,18 +185,38 @@ final class TraitMockAliasState
 
     public function killEscapedCells(): void
     {
+        $unknown = self::unknownValue();
         foreach ($this->cells as $cellId => $cell) {
             if ($cell['escaped']) {
-                $this->cells[$cellId]['mock'] = false;
-                $this->cells[$cellId]['container'] = false;
+                $this->setCellValue($cellId, $unknown);
             }
         }
+    }
+
+    public function killStaticLocalCells(): void
+    {
+        $unknown = self::unknownValue();
+        foreach ($this->cells as $cellId => $cell) {
+            if ($cell['staticLocal']) {
+                $this->setCellValue($cellId, $unknown);
+            }
+        }
+    }
+
+    public function resetVar(string $varName): void
+    {
+        $this->detachMayRefs($varName);
+        unset($this->vars[$varName]);
     }
 
     public function unsetVar(string $varName): void
     {
         $this->detachMayRefs($varName);
         unset($this->vars[$varName]);
+
+        $cellId = $this->nextCell++;
+        $this->cells[$cellId] = self::makeCell(self::nullValue(), false, false);
+        $this->vars[$varName] = $cellId;
     }
 
     public function killVar(string $varName): void
@@ -167,6 +232,7 @@ final class TraitMockAliasState
         }
 
         $oldEscaped = $this->cells[$oldCellId]['escaped'] ?? false;
+        $oldStaticLocal = $this->cells[$oldCellId]['staticLocal'] ?? false;
         $coAliased = [];
         foreach ($this->vars as $other => $cid) {
             if ($other !== $varName && $cid === $oldCellId) {
@@ -175,7 +241,7 @@ final class TraitMockAliasState
         }
 
         $newCellId = $this->nextCell++;
-        $this->cells[$newCellId] = ['mock' => false, 'container' => false, 'escaped' => $oldEscaped];
+        $this->cells[$newCellId] = self::makeCell(self::unknownValue(), $oldEscaped, $oldStaticLocal);
         $this->vars[$varName] = $newCellId;
 
         foreach ($coAliased as $other) {
@@ -191,9 +257,9 @@ final class TraitMockAliasState
 
     public function killAll(): void
     {
-        foreach ($this->cells as $cellId => $cell) {
-            $this->cells[$cellId]['mock'] = false;
-            $this->cells[$cellId]['container'] = false;
+        $unknown = self::unknownValue();
+        foreach (array_keys($this->cells) as $cellId) {
+            $this->setCellValue($cellId, $unknown);
         }
     }
 
@@ -215,11 +281,7 @@ final class TraitMockAliasState
                 continue;
             }
             $newId = $copy->nextCell++;
-            $copy->cells[$newId] = [
-                'mock' => $cell['mock'],
-                'container' => $cell['container'],
-                'escaped' => false,
-            ];
+            $copy->cells[$newId] = self::makeCell(self::extractValue($cell), false, false);
             $copy->vars[$varName] = $newId;
         }
 
@@ -276,25 +338,25 @@ final class TraitMockAliasState
         $joined = new self();
         foreach ($groups as $groupVars) {
             $rep = $groupVars[0];
-            $mock = true;
-            $container = true;
+            $value = null;
             $escaped = false;
+            $staticLocal = false;
 
             foreach ($live as $branch) {
                 $cid = $branch->vars[$rep] ?? null;
                 if ($cid === null || !isset($branch->cells[$cid])) {
-                    $mock = false;
-                    $container = false;
-                    continue;
+                    $branchVal = self::unknownValue();
+                } else {
+                    $cell = $branch->cells[$cid];
+                    $branchVal = self::extractValue($cell);
+                    $escaped = $escaped || $cell['escaped'];
+                    $staticLocal = $staticLocal || $cell['staticLocal'];
                 }
-                $cell = $branch->cells[$cid];
-                $mock = $mock && $cell['mock'];
-                $container = $container && $cell['container'];
-                $escaped = $escaped || $cell['escaped'];
+                $value = $value === null ? $branchVal : self::meetValue($value, $branchVal);
             }
 
             $newId = $joined->nextCell++;
-            $joined->cells[$newId] = ['mock' => $mock, 'container' => $container, 'escaped' => $escaped];
+            $joined->cells[$newId] = self::makeCell($value ?? self::unknownValue(), $escaped, $staticLocal);
             foreach ($groupVars as $varName) {
                 $joined->vars[$varName] = $newId;
             }
@@ -331,6 +393,45 @@ final class TraitMockAliasState
         return $joined;
     }
 
+    /**
+     * @param CellRecord $cell
+     * @return CellValue
+     */
+    private static function extractValue(array $cell): array
+    {
+        return [
+            'mock' => $cell['mock'],
+            'container' => $cell['container'],
+            'null' => $cell['null'],
+            'mockOrNull' => $cell['mockOrNull'],
+        ];
+    }
+
+    /**
+     * @param CellValue $value
+     * @return CellRecord
+     */
+    private static function makeCell(array $value, bool $escaped, bool $staticLocal): array
+    {
+        return [
+            'mock' => $value['mock'],
+            'container' => $value['container'],
+            'null' => $value['null'],
+            'mockOrNull' => $value['mockOrNull'],
+            'escaped' => $escaped,
+            'staticLocal' => $staticLocal,
+        ];
+    }
+
+    /** @param CellValue $value */
+    private function setCellValue(int $cellId, array $value): void
+    {
+        $this->cells[$cellId]['mock'] = $value['mock'];
+        $this->cells[$cellId]['container'] = $value['container'];
+        $this->cells[$cellId]['null'] = $value['null'];
+        $this->cells[$cellId]['mockOrNull'] = $value['mockOrNull'];
+    }
+
     private function ensureCell(string $varName): int
     {
         if (isset($this->vars[$varName])) {
@@ -338,7 +439,7 @@ final class TraitMockAliasState
         }
 
         $cellId = $this->nextCell++;
-        $this->cells[$cellId] = ['mock' => false, 'container' => false, 'escaped' => false];
+        $this->cells[$cellId] = self::makeCell(self::unknownValue(), false, false);
         $this->vars[$varName] = $cellId;
 
         return $cellId;

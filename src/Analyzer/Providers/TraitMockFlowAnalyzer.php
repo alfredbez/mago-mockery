@@ -8,6 +8,8 @@ use Mago\Sdk\Analyzer\Codebase;
 use PhpToken;
 
 use function max;
+use function preg_match;
+use function str_replace;
 use function strtolower;
 
 final class TraitMockFlowAnalyzer
@@ -139,7 +141,7 @@ final class TraitMockFlowAnalyzer
                 && TraitMockTokenScope::isNameToken($tokens[$i])
                 && strtolower(TraitMockTokenScope::resolveClassName($tokens[$i], $this->syntax->imports)) === 'mockery\\container';
 
-            $state->unsetVar($varName);
+            $state->resetVar($varName);
             if ($isContainer) {
                 $state->assignValue($varName, TraitMockAliasState::containerValue());
             }
@@ -276,13 +278,16 @@ final class TraitMockFlowAnalyzer
                 }
                 $varName = $tokens[$sStart]->text;
                 if ($sStart + 2 < $sEnd && $tokens[$sStart + 1]->text === '=') {
-                    $this->expr->evalExpr($sStart + 2, $sEnd, $state, $containsTarget);
-                    if ($this->expr->hasReachedTarget()) {
+                    if ($containsTarget && $this->syntax->rangeContainsTarget($sStart + 2, $sEnd)) {
+                        $this->expr->evalExpr($sStart + 2, $sEnd, $state, true);
+
                         return true;
                     }
+                    $initState = clone $state;
+                    $this->expr->evalExpr($sStart + 2, $sEnd, $initState, false);
+                    $state->replaceWith(TraitMockAliasState::join([$state, $initState]));
                 }
-                $state->killVar($varName);
-                $state->markEscaped($varName);
+                $state->bindStaticLocal($varName);
             }
 
             return false;
@@ -469,13 +474,32 @@ final class TraitMockFlowAnalyzer
         $kind = $tokens[$start]->id;
 
         if ($kind === T_DO) {
-            $bodyEnd = $this->syntax->findStatementEnd($start + 1, $end);
-            $this->killWritesInRange($start + 1, $end, $state);
-            if ($containsTarget && $this->syntax->rangeContainsTarget($start + 1, $bodyEnd)) {
-                return $this->walkStatements($start + 1, $bodyEnd, $state);
+            $bodyStart = $start + 1;
+            $bodyEnd = $this->syntax->findStatementEnd($bodyStart, $end);
+            $hasCondition = $bodyEnd + 1 < $end && $tokens[$bodyEnd]->id === T_WHILE && $tokens[$bodyEnd + 1]->text === '(';
+            $condStart = $hasCondition ? $bodyEnd + 2 : null;
+            $condEnd = $hasCondition ? $this->syntax->closeOf($bodyEnd + 1) : null;
+
+            if ($condStart !== null && $condEnd !== null && $this->isStaticallyFalseCondition($condStart, $condEnd)) {
+                if ($containsTarget && $this->syntax->rangeContainsTarget($bodyStart, $bodyEnd)) {
+                    return $this->walkStatements($bodyStart, $bodyEnd, $state);
+                }
+                if (!$containsTarget && !$this->hasLoopControlJump($bodyStart, $bodyEnd)) {
+                    $this->walkStatements($bodyStart, $bodyEnd, $state);
+
+                    return false;
+                }
+                $this->killWritesInRange($bodyStart, $bodyEnd, $state);
+
+                return false;
             }
-            if ($containsTarget && $bodyEnd + 1 < $end && $tokens[$bodyEnd]->id === T_WHILE && $tokens[$bodyEnd + 1]->text === '(') {
-                $this->expr->evalExpr($bodyEnd + 2, $this->syntax->closeOf($bodyEnd + 1), $state, true);
+
+            $this->killWritesInRange($bodyStart, $end, $state);
+            if ($containsTarget && $this->syntax->rangeContainsTarget($bodyStart, $bodyEnd)) {
+                return $this->walkStatements($bodyStart, $bodyEnd, $state);
+            }
+            if ($containsTarget && $condStart !== null && $condEnd !== null) {
+                $this->expr->evalExpr($condStart, $condEnd, $state, true);
 
                 return true;
             }
@@ -538,6 +562,8 @@ final class TraitMockFlowAnalyzer
                 if ($this->expr->hasReachedTarget()) {
                     return true;
                 }
+                $state->killEscapedCells();
+                $state->killStaticLocalCells();
                 $this->killForeachTargets($asIdx + 1, $headerClose, $state);
             }
             $this->killWritesInRange($bodyStart, $bodyEnd, $state);
@@ -637,6 +663,8 @@ final class TraitMockFlowAnalyzer
             } else {
                 $this->expr->evalExpr($argStart, $argEnd, $state, false);
             }
+            $state->killEscapedCells();
+            $state->killStaticLocalCells();
         }
 
         return false;
@@ -659,9 +687,10 @@ final class TraitMockFlowAnalyzer
                         $argsClose = $this->syntax->closeOf($j);
                         $this->killWritesInRange($j + 1, $argsClose, $state);
                         $this->expr->invalidateByRefArguments($this->expr->parseCallArguments($j + 1, $argsClose), $state, null, false);
-                        $state->killEscapedCells();
                         $j = $argsClose + 1;
                     }
+                    $state->killEscapedCells();
+                    $state->killStaticLocalCells();
                     while ($j < $end && $tokens[$j]->text !== '{') {
                         ++$j;
                     }
@@ -670,6 +699,9 @@ final class TraitMockFlowAnalyzer
                     }
                     continue;
                 }
+                $state->killEscapedCells();
+                $state->killStaticLocalCells();
+                continue;
             }
 
             if (isset(self::CLASSLIKE_TOKENS[$tok->id]) && !TraitMockTokenScope::isMemberAccess($tokens, $i)) {
@@ -745,6 +777,27 @@ final class TraitMockFlowAnalyzer
                 continue;
             }
 
+            if ($tok->id === T_STATIC && $i + 1 < $end && $tokens[$i + 1]->id === T_VARIABLE) {
+                $sEnd = $this->syntax->scanToStatementTerminator($i + 1, $end);
+                foreach ($this->syntax->splitTopLevel($i + 1, $this->syntax->trimTerminator($sEnd), ',') as [$sStart, $sEndPart]) {
+                    if ($sStart < $sEndPart && $tokens[$sStart]->id === T_VARIABLE) {
+                        if ($sStart + 2 < $sEndPart && $tokens[$sStart + 1]->text === '=') {
+                            $this->killWritesInRange($sStart + 2, $sEndPart, $state);
+                        }
+                        $state->maybeDetachAndKillVar($tokens[$sStart]->text);
+                        $state->markStaticLocal($tokens[$sStart]->text);
+                    }
+                }
+                $i = $sEnd - 1;
+                continue;
+            }
+
+            if ($tok->id === T_CLONE && !TraitMockTokenScope::isMemberAccess($tokens, $i)) {
+                $state->killEscapedCells();
+                $state->killStaticLocalCells();
+                continue;
+            }
+
             if ($tok->id === T_GLOBAL) {
                 $gEnd = $this->syntax->scanToStatementTerminator($i + 1, $end);
                 for ($k = $i + 1; $k < $gEnd; ++$k) {
@@ -789,7 +842,7 @@ final class TraitMockFlowAnalyzer
             if ($tok->text === '(' && $i > $start) {
                 $prev = $tokens[$i - 1];
                 if (
-                    $prev->id !== T_ISSET && $prev->id !== T_EMPTY && $prev->id !== T_ARRAY && $prev->id !== T_LIST
+                    $prev->id !== T_ISSET && $prev->id !== T_EMPTY && $prev->id !== T_ARRAY && $prev->id !== T_LIST && $prev->id !== T_CLONE
                     && (TraitMockTokenScope::isNameToken($prev) || TraitMockTokenScope::isKeywordIdentifier($prev) || $prev->id === T_VARIABLE || $prev->text === ')' || $prev->text === ']')
                 ) {
                     $args = $this->expr->parseCallArguments($i + 1, $this->syntax->closeOf($i));
@@ -800,9 +853,136 @@ final class TraitMockFlowAnalyzer
                         $this->expr->invalidateByRefArguments($args, $state, null, false);
                     }
                     $state->killEscapedCells();
+                    if ($state->hasStaticLocalCells()) {
+                        $isPlainFnCall = !TraitMockTokenScope::isMemberAccess($tokens, $i - 1)
+                            && ($i - 2 < $start || $tokens[$i - 2]->id !== T_NEW);
+                        if (!$isPlainFnCall || !$this->expr->isPureFunctionCall($prev, $args)) {
+                            $state->killStaticLocalCells();
+                        }
+                    }
                 }
             }
         }
+    }
+
+    private function isStaticallyFalseCondition(int $start, int $end): bool
+    {
+        $tokens = $this->syntax->tokens;
+        [$start, $end] = $this->syntax->stripOuterParens($start, $end);
+        if ($start >= $end) {
+            return false;
+        }
+
+        $len = $end - $start;
+        $first = $tokens[$start];
+        if ($len === 1) {
+            $lower = strtolower($first->text);
+            if (
+                ($first->id === T_STRING && ($lower === 'false' || $lower === 'null'))
+                || ($first->id === T_NAME_FULLY_QUALIFIED && ($lower === '\\false' || $lower === '\\null'))
+            ) {
+                return true;
+            }
+            if ($first->id === T_LNUMBER) {
+                return preg_match('/^(?:0[xX]0[0_]*|0[bB]0[0_]*|0[oO]0[0_]*|0[0_]*)$/', $first->text) === 1;
+            }
+            if ($first->id === T_DNUMBER) {
+                return (float) str_replace('_', '', $first->text) === 0.0;
+            }
+            if ($first->id === T_CONSTANT_ENCAPSED_STRING) {
+                return $first->text === "''" || $first->text === '""' || $first->text === "'0'" || $first->text === '"0"';
+            }
+
+            return false;
+        }
+
+        if ($len === 2 && $first->text === '[' && $tokens[$start + 1]->text === ']') {
+            return true;
+        }
+        if ($len === 3 && $first->id === T_ARRAY && $tokens[$start + 1]->text === '(' && $tokens[$start + 2]->text === ')') {
+            return true;
+        }
+        if ($first->text === '!') {
+            return $this->isStaticallyTrueCondition($start + 1, $end);
+        }
+
+        return false;
+    }
+
+    private function isStaticallyTrueCondition(int $start, int $end): bool
+    {
+        $tokens = $this->syntax->tokens;
+        [$start, $end] = $this->syntax->stripOuterParens($start, $end);
+        if ($start >= $end) {
+            return false;
+        }
+
+        $len = $end - $start;
+        $first = $tokens[$start];
+        if ($len === 1) {
+            $lower = strtolower($first->text);
+            if (
+                ($first->id === T_STRING && $lower === 'true')
+                || ($first->id === T_NAME_FULLY_QUALIFIED && $lower === '\\true')
+            ) {
+                return true;
+            }
+            if ($first->id === T_LNUMBER) {
+                return preg_match('/^(?:0[xX]0[0_]*|0[bB]0[0_]*|0[oO]0[0_]*|0[0_]*)$/', $first->text) !== 1;
+            }
+
+            return false;
+        }
+
+        if ($first->text === '!') {
+            return $this->isStaticallyFalseCondition($start + 1, $end);
+        }
+
+        return false;
+    }
+
+    private function hasLoopControlJump(int $start, int $end): bool
+    {
+        $tokens = $this->syntax->tokens;
+        for ($i = $start; $i < $end; ++$i) {
+            $tok = $tokens[$i];
+            if (isset(self::CLASSLIKE_TOKENS[$tok->id]) && !TraitMockTokenScope::isMemberAccess($tokens, $i)) {
+                $j = $i + 1;
+                while ($j < $end && $tokens[$j]->text !== '{' && $tokens[$j]->text !== ';') {
+                    ++$j;
+                }
+                if ($j < $end && $tokens[$j]->text === '{') {
+                    $i = $this->syntax->closeOf($j);
+                }
+                continue;
+            }
+            if ($tok->id === T_FUNCTION && !TraitMockTokenScope::isMemberAccess($tokens, $i)) {
+                $j = $i + 1;
+                while ($j < $end && $tokens[$j]->text !== '{' && $tokens[$j]->text !== ';') {
+                    ++$j;
+                }
+                if ($j < $end && $tokens[$j]->text === '{') {
+                    $i = $this->syntax->closeOf($j);
+                }
+                continue;
+            }
+            if ($tok->id === T_FN && !TraitMockTokenScope::isMemberAccess($tokens, $i)) {
+                $j = $i + 1 + ($i + 1 < $end && $tokens[$i + 1]->text === '&' ? 1 : 0);
+                if ($j < $end && $tokens[$j]->text === '(') {
+                    $j = $this->syntax->closeOf($j) + 1;
+                }
+                $arrowIdx = $this->syntax->findTopLevelId($j, $end, [T_DOUBLE_ARROW]);
+                if ($arrowIdx !== null) {
+                    $i = $this->syntax->findArrowBodyEnd($arrowIdx + 1, $end) - 1;
+                }
+                continue;
+            }
+            if ($tok->id === T_BREAK || $tok->id === T_CONTINUE || $tok->id === T_GOTO) {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private function killAssignmentLhsInScan(int $floor, int $assignIdx, TraitMockAliasState $state): void

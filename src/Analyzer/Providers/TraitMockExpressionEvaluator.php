@@ -6,6 +6,7 @@ namespace AlfredBez\MagoMockery\Analyzer\Providers;
 
 use Closure;
 use Mago\Sdk\Analyzer\Codebase;
+use Mago\Sdk\Analyzer\Metadata\FunctionLikeKind;
 use Mago\Sdk\Analyzer\Metadata\FunctionLikeMetadata;
 use Mago\Sdk\Analyzer\Metadata\MetadataFlags;
 use PhpToken;
@@ -32,20 +33,27 @@ final class TraitMockExpressionEvaluator
         'instancemock' => true, 'makepartial' => true, 'mock' => true, 'mustbe' => true, 'namedmock' => true,
         'never' => true, 'not' => true, 'on' => true, 'once' => true, 'ordered' => true, 'passthru' => true,
         'pattern' => true, 'shouldallowmockingmethod' => true, 'shouldallowmockingprotectedmethods' => true,
-        'shouldhavereceived' => true, 'shouldignoremissing' => true, 'shouldnothavereceived' => true,
-        'shouldnotreceive' => true, 'shouldreceive' => true, 'spy' => true, 'subset' => true,
+        'shoulddefermissing' => true, 'shouldhavereceived' => true, 'shouldignoremissing' => true,
+        'shouldnothavereceived' => true, 'shouldnotreceive' => true, 'shouldreceive' => true,
+        'spy' => true, 'subset' => true,
         'times' => true, 'twice' => true, 'type' => true, 'with' => true, 'withanyargs' => true,
         'withargs' => true, 'withnoargs' => true, 'zeroormoretimes' => true,
     ];
 
+    private const SAFE_MOCK_OBJECT_METHODS = [
+        'allows' => true, 'bydefault' => true, 'expects' => true, 'makepartial' => true,
+        'shouldallowmockingmethod' => true, 'shouldallowmockingprotectedmethods' => true,
+        'shoulddefermissing' => true, 'shouldhavereceived' => true, 'shouldignoremissing' => true,
+        'shouldnothavereceived' => true, 'shouldnotreceive' => true, 'shouldreceive' => true,
+    ];
     private const FACTORY_METHODS = ['mock' => true, 'spy' => true, 'namedmock' => true, 'instancemock' => true];
     private const HELPER_FUNCTIONS = ['mock' => true, 'spy' => true, 'namedmock' => true];
     private const FLUENT_PRESERVING_METHODS = [
         'bydefault' => true, 'makepartial' => true, 'shouldallowmockingmethod' => true,
-        'shouldallowmockingprotectedmethods' => true, 'shouldignoremissing' => true,
+        'shouldallowmockingprotectedmethods' => true, 'shoulddefermissing' => true, 'shouldignoremissing' => true,
     ];
     private const PREFIX_UNARY_TOKENS = [
-        T_PRINT => true, T_CLONE => true, T_INT_CAST => true, T_DOUBLE_CAST => true,
+        T_PRINT => true, T_INT_CAST => true, T_DOUBLE_CAST => true,
         T_STRING_CAST => true, T_ARRAY_CAST => true, T_OBJECT_CAST => true, T_BOOL_CAST => true, T_UNSET_CAST => true,
     ];
     private const INCLUDE_TOKENS = [
@@ -97,7 +105,17 @@ final class TraitMockExpressionEvaluator
 
         $tok = $tokens[$start];
         if ($end - $start === 1) {
-            return $tok->id === T_VARIABLE ? $state->valueOf($tok->text) : TraitMockAliasState::unknownValue();
+            if ($tok->id === T_VARIABLE) {
+                return $state->valueOf($tok->text);
+            }
+            if (
+                ($tok->id === T_STRING && strtolower($tok->text) === 'null')
+                || ($tok->id === T_NAME_FULLY_QUALIFIED && strtolower($tok->text) === '\\null')
+            ) {
+                return TraitMockAliasState::nullValue();
+            }
+
+            return TraitMockAliasState::unknownValue();
         }
 
         foreach ([T_LOGICAL_OR, T_LOGICAL_XOR, T_LOGICAL_AND] as $lowOp) {
@@ -178,8 +196,15 @@ final class TraitMockExpressionEvaluator
 
             return TraitMockAliasState::unknownValue();
         }
+        if ($tok->id === T_CLONE) {
+            return $this->evalClone($start, $end, $state, $stopAtTarget);
+        }
         if (isset(self::PREFIX_UNARY_TOKENS[$tok->id]) || $tok->text === '!' || $tok->text === '~' || $tok->text === '@' || $tok->text === '+' || $tok->text === '-') {
             $this->evalExpr($start + 1, $end, $state, $stopAtTarget);
+            if ($tok->id === T_STRING_CAST && !$this->reachedTarget && !$this->isPureLiteralExpr($start + 1, $end)) {
+                $state->killEscapedCells();
+                $state->killStaticLocalCells();
+            }
 
             return TraitMockAliasState::unknownValue();
         }
@@ -242,6 +267,14 @@ final class TraitMockExpressionEvaluator
             $this->evalExpr($start, $binIdx, $state, $stopAtTarget);
             if (!$this->reachedTarget) {
                 $this->evalExpr($binIdx + 1, $end, $state, $stopAtTarget);
+            }
+            if (
+                !$this->reachedTarget
+                && $tokens[$binIdx]->text === '.'
+                && (!$this->isPureLiteralExpr($start, $binIdx) || !$this->isPureLiteralExpr($binIdx + 1, $end))
+            ) {
+                $state->killEscapedCells();
+                $state->killStaticLocalCells();
             }
 
             return TraitMockAliasState::unknownValue();
@@ -335,6 +368,57 @@ final class TraitMockExpressionEvaluator
     }
 
     /** @return CellValue */
+    private function evalClone(int $start, int $end, TraitMockAliasState $state, bool $stopAtTarget): array
+    {
+        $tokens = $this->syntax->tokens;
+        $argStart = $start + 1;
+        if (
+            $argStart < $end
+            && $tokens[$argStart]->text === '('
+            && $this->syntax->closeOf($argStart) === $end - 1
+        ) {
+            $args = $this->parseCallArguments($argStart + 1, $end - 1);
+            if ($args === []) {
+                return TraitMockAliasState::unknownValue();
+            }
+            $inner = TraitMockAliasState::unknownValue();
+            $sawObject = false;
+            foreach ($args as $idx => $arg) {
+                if ($stopAtTarget && $tokens[$arg['start']]->pos >= $this->syntax->targetPos) {
+                    $this->reachedTarget = true;
+
+                    return TraitMockAliasState::unknownValue();
+                }
+                $argVal = $this->evalExpr($arg['start'], $arg['end'], $state, $stopAtTarget);
+                if ($this->reachedTarget) {
+                    return TraitMockAliasState::unknownValue();
+                }
+                if (!$arg['unpacked'] && ($arg['name'] === 'object' || ($arg['name'] === null && $idx === 0 && !$sawObject))) {
+                    $inner = $argVal;
+                    $sawObject = true;
+                }
+            }
+        } else {
+            $inner = $this->evalExpr($argStart, $end, $state, $stopAtTarget);
+            if ($this->reachedTarget) {
+                return TraitMockAliasState::unknownValue();
+            }
+        }
+
+        $state->killEscapedCells();
+        $state->killStaticLocalCells();
+
+        if ($inner['mock']) {
+            return TraitMockAliasState::mockValue();
+        }
+        if ($inner['container']) {
+            return TraitMockAliasState::containerValue();
+        }
+
+        return TraitMockAliasState::unknownValue();
+    }
+
+    /** @return CellValue */
     private function evalShortCircuit(
         int $start,
         int $opIdx,
@@ -347,6 +431,22 @@ final class TraitMockExpressionEvaluator
         if ($this->reachedTarget) {
             return TraitMockAliasState::unknownValue();
         }
+
+        if ($preserveValue) {
+            if ($lhsVal['null']) {
+                return $this->evalExpr($opIdx + 1, $end, $state, $stopAtTarget);
+            }
+            if ($lhsVal['mock'] || $lhsVal['container']) {
+                if ($stopAtTarget && $this->syntax->rangeContainsTarget($opIdx + 1, $end)) {
+                    $this->evalExpr($opIdx + 1, $end, $state, true);
+
+                    return TraitMockAliasState::unknownValue();
+                }
+
+                return $lhsVal;
+            }
+        }
+
         if ($stopAtTarget && $this->syntax->rangeContainsTarget($opIdx + 1, $end)) {
             $this->evalExpr($opIdx + 1, $end, $state, true);
 
@@ -360,7 +460,9 @@ final class TraitMockExpressionEvaluator
             return TraitMockAliasState::unknownValue();
         }
 
-        return $rhsState->terminated ? $lhsVal : TraitMockAliasState::meetValue($lhsVal, $rhsVal);
+        $nonNullVal = $lhsVal['mockOrNull'] ? TraitMockAliasState::mockValue() : $lhsVal;
+
+        return $rhsState->terminated ? $nonNullVal : TraitMockAliasState::meetValue($nonNullVal, $rhsVal);
     }
 
     /** @return CellValue */
@@ -444,21 +546,69 @@ final class TraitMockExpressionEvaluator
         }
 
         if ($op->id === T_COALESCE_EQUAL) {
+            if ($lhsIsVar) {
+                $lhsVar = $tokens[$lhsStart]->text;
+                $lhsVal = $state->valueOf($lhsVar);
+
+                if ($lhsVal['null']) {
+                    $rhsVal = $this->evalExpr($rhsStart, $end, $state, $stopAtTarget);
+                    if ($this->reachedTarget) {
+                        return TraitMockAliasState::unknownValue();
+                    }
+                    $state->assignValue($lhsVar, $rhsVal);
+
+                    return $rhsVal;
+                }
+
+                if ($lhsVal['mock'] || $lhsVal['container']) {
+                    if ($stopAtTarget && $this->syntax->rangeContainsTarget($rhsStart, $end)) {
+                        $this->evalExpr($rhsStart, $end, $state, true);
+
+                        return TraitMockAliasState::unknownValue();
+                    }
+
+                    return $lhsVal;
+                }
+
+                if ($stopAtTarget && $this->syntax->rangeContainsTarget($rhsStart, $end)) {
+                    if ($lhsVal['mockOrNull']) {
+                        $state->refineCellValue($lhsVar, TraitMockAliasState::nullValue());
+                    }
+                    $this->evalExpr($rhsStart, $end, $state, true);
+
+                    return TraitMockAliasState::unknownValue();
+                }
+
+                $nonNullState = clone $state;
+                if ($lhsVal['mockOrNull']) {
+                    $nonNullState->refineCellValue($lhsVar, TraitMockAliasState::mockValue());
+                }
+
+                $nullState = clone $state;
+                if ($lhsVal['mockOrNull']) {
+                    $nullState->refineCellValue($lhsVar, TraitMockAliasState::nullValue());
+                }
+                $rhsVal = $this->evalExpr($rhsStart, $end, $nullState, false);
+                $nullState->assignValue($lhsVar, $rhsVal);
+
+                $state->replaceWith(TraitMockAliasState::join([$nonNullState, $nullState]));
+
+                return $state->valueOf($lhsVar);
+            }
+
             if ($stopAtTarget && $this->syntax->rangeContainsTarget($rhsStart, $end)) {
                 $this->evalExpr($rhsStart, $end, $state, true);
 
                 return TraitMockAliasState::unknownValue();
             }
             $afterRhs = clone $state;
-            $rhsVal = $this->evalExpr($rhsStart, $end, $afterRhs, false);
-            if ($lhsIsVar) {
-                $afterRhs->assignValue($tokens[$lhsStart]->text, $rhsVal);
-            } else {
-                ($lhsStart < $lhsEnd && $tokens[$lhsStart]->text === '$') ? $afterRhs->killAll() : $afterRhs->killEscapedCells();
-            }
+            $this->evalExpr($rhsStart, $end, $afterRhs, false);
+            ($lhsStart < $lhsEnd && ($tokens[$lhsStart]->text === '$' || $tokens[$lhsStart]->text === '$GLOBALS'))
+                ? $afterRhs->killAll()
+                : $afterRhs->killEscapedCells();
             $state->replaceWith(TraitMockAliasState::join([$state, $afterRhs]));
 
-            return $lhsIsVar ? $state->valueOf($tokens[$lhsStart]->text) : TraitMockAliasState::unknownValue();
+            return TraitMockAliasState::unknownValue();
         }
 
         $rhsVal = $this->evalExpr($rhsStart, $end, $state, $stopAtTarget);
@@ -675,6 +825,9 @@ final class TraitMockExpressionEvaluator
                 ++$i;
                 if ($i < $end && $tokens[$i]->text === '(') {
                     $i = $this->evalCallAtParen($i, $trial, $stopAtTarget, null, false);
+                } else {
+                    $trial->killEscapedCells();
+                    $trial->killStaticLocalCells();
                 }
                 while (!$this->reachedTarget && $i < $end && $tokens[$i]->text !== '{') {
                     ++$i;
@@ -691,6 +844,9 @@ final class TraitMockExpressionEvaluator
                         ? $this->codebase?->getDeclaringMethod($resolved, '__construct')
                         : null;
                     $i = $this->evalCallAtParen($i, $trial, $stopAtTarget, $meta, $safe);
+                } else {
+                    $trial->killEscapedCells();
+                    $trial->killStaticLocalCells();
                 }
                 if (strtolower($resolved) === 'mockery\\container') {
                     $val = TraitMockAliasState::containerValue();
@@ -705,7 +861,8 @@ final class TraitMockExpressionEvaluator
         } elseif (TraitMockTokenScope::isNameToken($tok) && $i + 1 < $end && $tokens[$i + 1]->text === '(') {
             $globalCandidate = strtolower($this->syntax->resolveGlobalFunctionCandidate($tok));
             $safe = isset(self::HELPER_FUNCTIONS[$globalCandidate]);
-            $meta = (!$safe && $this->hasBareVariableArgument($i + 2, $this->syntax->closeOf($i + 1)))
+            $argsClose = $this->syntax->closeOf($i + 1);
+            $meta = (!$safe && ($this->hasBareVariableArgument($i + 2, $argsClose) || ($trial->hasStaticLocalCells() && $this->areArgsPureLiterals($this->parseCallArguments($i + 2, $argsClose)))))
                 ? $this->resolveFunctionMetadata($tok)
                 : null;
             $i = $this->evalCallAtParen($i + 1, $trial, $stopAtTarget, $meta, $safe);
@@ -768,7 +925,7 @@ final class TraitMockExpressionEvaluator
                 if ($i + 2 < $end && $tokens[$i + 2]->text === '(' && ($member->id === T_STRING || TraitMockTokenScope::isKeywordIdentifier($member))) {
                     $methodLower = strtolower($member->text);
                     $safe = ($val['container'] && isset(self::FACTORY_METHODS[$methodLower]))
-                        || ($val['mock'] && isset(self::SAFE_MOCKERY_METHODS[$methodLower]));
+                        || ($val['mock'] && isset(self::SAFE_MOCK_OBJECT_METHODS[$methodLower]));
                     $meta = (!$safe && $baseIsThis && $this->enclosingClass !== null && $this->hasBareVariableArgument($i + 3, $this->syntax->closeOf($i + 2)))
                         ? $this->codebase?->getDeclaringMethod($this->enclosingClass, $member->text)
                         : null;
@@ -779,9 +936,15 @@ final class TraitMockExpressionEvaluator
                 } elseif ($member->text === '{') {
                     $mClose = $this->syntax->closeOf($i + 1);
                     $this->evalExpr($i + 2, $mClose, $trial, $stopAtTarget);
+                    if (!$this->reachedTarget) {
+                        $trial->killEscapedCells();
+                        $trial->killStaticLocalCells();
+                    }
                     $i = $mClose + 1;
                     $val = TraitMockAliasState::unknownValue();
                 } else {
+                    $trial->killEscapedCells();
+                    $trial->killStaticLocalCells();
                     $i += 2;
                     $val = TraitMockAliasState::unknownValue();
                 }
@@ -789,6 +952,10 @@ final class TraitMockExpressionEvaluator
             } elseif ($step->text === '[') {
                 $close = $this->syntax->closeOf($i);
                 $this->evalExpr($i + 1, $close, $trial, $stopAtTarget);
+                if (!$this->reachedTarget) {
+                    $trial->killEscapedCells();
+                    $trial->killStaticLocalCells();
+                }
                 $val = TraitMockAliasState::unknownValue();
                 $baseIsThis = false;
                 $i = $close + 1;
@@ -846,8 +1013,79 @@ final class TraitMockExpressionEvaluator
         }
         $this->invalidateByRefArguments($args, $state, $calleeMeta, $knownSafeByValue);
         $state->killEscapedCells();
+        if (!$this->isNonReentrantCallee($calleeMeta, $args)) {
+            $state->killStaticLocalCells();
+        }
 
         return $close + 1;
+    }
+
+    /** @param list<CallArgument> $args */
+    public function isPureFunctionCall(PhpToken $tok, array $args): bool
+    {
+        if (!TraitMockTokenScope::isNameToken($tok) || !$this->areArgsPureLiterals($args)) {
+            return false;
+        }
+        $globalCandidate = strtolower($this->syntax->resolveGlobalFunctionCandidate($tok));
+        if (isset(self::HELPER_FUNCTIONS[$globalCandidate])) {
+            return false;
+        }
+
+        return $this->isNonReentrantCallee($this->resolveFunctionMetadata($tok), $args);
+    }
+
+    /** @param list<CallArgument> $args */
+    private function isNonReentrantCallee(?FunctionLikeMetadata $meta, array $args): bool
+    {
+        return $meta !== null
+            && $meta->kind === FunctionLikeKind::Function_
+            && $meta->flags->contains(MetadataFlags::BUILTIN)
+            && $meta->flags->contains(MetadataFlags::PURE)
+            && !$meta->flags->contains(MetadataFlags::USER_DEFINED)
+            && $this->areArgsPureLiterals($args);
+    }
+
+    /** @param list<CallArgument> $args */
+    private function areArgsPureLiterals(array $args): bool
+    {
+        foreach ($args as $arg) {
+            if ($arg['unpacked'] || !$this->isPureLiteralExpr($arg['start'], $arg['end'])) {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private function isPureLiteralExpr(int $start, int $end): bool
+    {
+        $tokens = $this->syntax->tokens;
+        [$start, $end] = $this->syntax->stripOuterParens($start, $end);
+        if ($start >= $end) {
+            return false;
+        }
+
+        $tok = $tokens[$start];
+        if ($end - $start === 1) {
+            if ($tok->id === T_LNUMBER || $tok->id === T_DNUMBER || $tok->id === T_CONSTANT_ENCAPSED_STRING) {
+                return true;
+            }
+            $lower = strtolower($tok->text);
+
+            return ($tok->id === T_STRING && ($lower === 'true' || $lower === 'false' || $lower === 'null'))
+                || ($tok->id === T_NAME_FULLY_QUALIFIED && ($lower === '\\true' || $lower === '\\false' || $lower === '\\null'));
+        }
+
+        if ($tok->text === '+' || $tok->text === '-' || $tok->text === '!' || $tok->text === '~') {
+            return $this->isPureLiteralExpr($start + 1, $end);
+        }
+
+        $dotIdx = $this->syntax->findTopLevel($start, $end, static fn (PhpToken $t): bool => $t->text === '.');
+        if ($dotIdx !== null) {
+            return $this->isPureLiteralExpr($start, $dotIdx) && $this->isPureLiteralExpr($dotIdx + 1, $end);
+        }
+
+        return false;
     }
 
     private function hasBareVariableArgument(int $start, int $end): bool

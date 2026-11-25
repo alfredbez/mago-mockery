@@ -33,6 +33,7 @@ final class StrictAllowanceResolver
         'makepartial' => true,
         'shouldallowmockingmethod' => true,
         'shouldallowmockingprotectedmethods' => true,
+        'shoulddefermissing' => true,
         'shouldignoremissing' => true,
     ];
 

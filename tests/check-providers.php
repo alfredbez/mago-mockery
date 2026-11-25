@@ -338,7 +338,7 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
     );
 
     $fnBucket = Protocol::GET_FUNCTIONS << 4;
-    $makeFunction = static function (string $name, array $parameters) use ($location): FunctionLikeMetadata {
+    $makeFunction = static function (string $name, array $parameters, int $flags = 0) use ($location): FunctionLikeMetadata {
         return new FunctionLikeMetadata(
             identifier: new FunctionLikeIdentifier(FunctionLikeKind::Function_, $name, null),
             kind: \Mago\Sdk\Analyzer\Metadata\FunctionLikeKind::Function_,
@@ -358,7 +358,7 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
             assertionsInferred: false,
             globalsAccessed: [],
             hasDocblock: false,
-            flags: new MetadataFlags(0),
+            flags: new MetadataFlags($flags),
             availableVersions: [],
             visibility: null,
             final: false,
@@ -370,6 +370,39 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
     };
     $cache->values[$fnBucket]['overwrite'] = $makeFunction('overwrite', [$parameter('x', Type::mixed(), MetadataFlags::BY_REFERENCE)]);
     $cache->values[$fnBucket]['inspect'] = $makeFunction('inspect', [$parameter('x', Type::mixed())]);
+    $cache->values[$fnBucket]['strlen'] = $makeFunction('strlen', [$parameter('string', Type::string())], MetadataFlags::BUILTIN | MetadataFlags::PURE);
+    $cache->values[$fnBucket]['implode'] = $makeFunction('implode', [$parameter('separator', Type::string()), $parameter('array', Type::array(Type::int(), Type::mixed()))], MetadataFlags::BUILTIN | MetadataFlags::PURE);
+    $cache->values[$fnBucket]['fakepure'] = $makeFunction('fakePure', [], MetadataFlags::USER_DEFINED | MetadataFlags::PURE);
+    $cache->values[$fnBucket]['mock'] = $makeFunction('mock', [$parameter('args', Type::mixed(), MetadataFlags::VARIADIC)], MetadataFlags::USER_DEFINED);
+    $cache->values[$fnBucket]['reenter'] = $makeFunction('reenter', [], MetadataFlags::USER_DEFINED);
+    $cache->values[$bucket]["purebase\0poke"] = new FunctionLikeMetadata(
+        identifier: new FunctionLikeIdentifier(FunctionLikeKind::Method, 'poke', 'PureBase'),
+        kind: \Mago\Sdk\Analyzer\Metadata\FunctionLikeKind::Method,
+        name: 'poke',
+        originalName: 'poke',
+        location: $location,
+        nameLocation: $location,
+        parameters: [],
+        declaredReturnType: null,
+        returnType: null,
+        templates: [],
+        attributes: [],
+        thrownTypes: [],
+        assertions: [],
+        ifTrueAssertions: [],
+        ifFalseAssertions: [],
+        assertionsInferred: false,
+        globalsAccessed: [],
+        hasDocblock: true,
+        flags: new MetadataFlags(MetadataFlags::USER_DEFINED | MetadataFlags::PURE),
+        availableVersions: [],
+        visibility: Visibility::Protected,
+        final: false,
+        abstract: false,
+        static: false,
+        constructor: false,
+        whereConstraints: [],
+    );
 
     $check(
         $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); overwrite($m); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
@@ -438,6 +471,159 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
     $check(
         $filterDecision('<?php use Mockery; $m = Mockery::mock(T::class); $GLOBALS[\'m\'] = T::class; $x = $m::TAG;', '$m::TAG') === IssueFilterDecision::Keep,
         'File-scope $GLOBALS write must invalidate top-level mock guarantee.',
+    );
+
+    $check(
+        $filterDecision('<?php use Mockery; function f() { static $m; $m = Mockery::mock(T::class); strlen("x"); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Remove,
+        'Static-local mock must survive intervening pure built-in call.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { static $m; $m = Mockery::mock(T::class); reenter(); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Static-local mock must invalidate on potentially re-entrant user call.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { static $m; $m = Mockery::mock(T::class); overwrite($m); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Static-local mock passed by reference must invalidate.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { static $m = null; $m ??= Mockery::mock(T::class); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Static-local initializer must not guarantee null on subsequent calls.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); do { $r = $m::TAG; $m = T::class; } while (false); return $r; }', '$m::TAG') === IssueFilterDecision::Remove,
+        'do-while(false) first iteration must preserve pre-loop mock before later body write.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); do { $r = $m::TAG; $m = T::class; } while (0); return $r; }', '$m::TAG') === IssueFilterDecision::Remove,
+        'do-while(0) first iteration must preserve pre-loop mock before later body write.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f(bool $c) { $m = Mockery::mock(T::class); do { $r = $m::TAG; $m = T::class; } while ($c); return $r; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'do-while with dynamic condition must keep diagnostic when body invalidates receiver.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); do { $m = T::class; $r = $m::TAG; } while (false); return $r; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'do-while(false) access after body reassignment must keep diagnostic.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f(bool $b) { $m = T::class; do { if ($b) { break; } $m = Mockery::mock(T::class); } while (false); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'do-while(false) early break before mock assignment must keep post-loop diagnostic.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = T::class; do { $m = Mockery::mock(T::class); } while (false); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Remove,
+        'do-while(false) unconditional body mock assignment must dominate post-loop access.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class)->shouldDeferMissing(); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Remove,
+        'shouldDeferMissing() fluent call must preserve mock provenance.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class)->unknownMethod(); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Unknown method call on mock must not preserve mock provenance.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $c = clone Mockery::mock(T::class); return $c::TAG; }', '$c::TAG') === IssueFilterDecision::Remove,
+        'Direct clone of mock must preserve mock provenance.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $p = T::class; $c = clone $p; return $c::TAG; }', '$c::TAG') === IssueFilterDecision::Keep,
+        'Clone of non-mock must keep diagnostic.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = null; $m ??= Mockery::mock(T::class); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Remove,
+        'Null-coalescing assignment from known null to mock must suppress diagnostic.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); $m ??= T::class; return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Remove,
+        'Null-coalescing assignment on known mock must preserve mock guarantee.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = T::class; $m ??= Mockery::mock(T::class); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Null-coalescing assignment on non-mock class-string must keep diagnostic.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f(bool $b) { $m = $b ? Mockery::mock(T::class) : null; $m ??= Mockery::mock(T::class); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Remove,
+        'Null-coalescing assignment on nullable mock with mock fallback must suppress diagnostic.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f(bool $b) { $m = $b ? Mockery::mock(T::class) : null; $m ??= T::class; return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Null-coalescing assignment on nullable mock with non-mock fallback must keep diagnostic.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f($m) { $m ??= Mockery::mock(T::class); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Null-coalescing assignment on unknown parameter must keep diagnostic.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = T::class; unset($m); $m ??= Mockery::mock(T::class); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Remove,
+        'Null-coalescing assignment after unset to mock must suppress diagnostic.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f($evil) { $m = T::class; $fn = static function () use (&$m) { $m = T::class; }; $m = Mockery::mock(T::class); $_ = clone $evil; return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'clone must invalidate escaped reference cells.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f($evil) { static $m; $m = Mockery::mock(T::class); $_ = clone $evil; return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'clone must invalidate static-local cells.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f($evil) { $v = null; $fn = static function () use (&$v) { $v = T::class; }; $v = null; $_ = clone $evil; $v ??= Mockery::mock(T::class); return $v::TAG; }', '$v::TAG') === IssueFilterDecision::Keep,
+        'clone must invalidate escaped null before coalesce assignment.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f($evil) { static $m; $m = Mockery::mock(T::class); for ($i = 0; $i < 2; ++$i) { $r = $m::TAG; $_ = clone $evil; } return $r; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'clone inside loop must invalidate static-local cells across back-edge.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); $c = clone(object: $m, withProperties: ["x" => 1]); return $c::TAG; }', '$c::TAG') === IssueFilterDecision::Remove,
+        'PHP 8.5 clone with named object argument must preserve mock provenance.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); $c = clone(withProperties: ["x" => 1], object: $m); return $c::TAG; }', '$c::TAG') === IssueFilterDecision::Remove,
+        'PHP 8.5 clone with reversed named arguments must preserve mock provenance.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); $other = Mockery::mock(T::class); $c = clone(object: $m, withProperties: [$other = T::class]); return $other::TAG; }', '$other::TAG') === IssueFilterDecision::Keep,
+        'PHP 8.5 clone withProperties argument must evaluate side effects.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $m = Mockery::mock(T::class); $c = clone(withProperties: [$m = T::class], object: $m); return $c::TAG; }', '$c::TAG') === IssueFilterDecision::Keep,
+        'PHP 8.5 clone named arguments must evaluate left to right.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { $other = T::class; static $a = ($other = Mockery::mock(T::class)); return $other::TAG; }', '$other::TAG') === IssueFilterDecision::Keep,
+        'Static-local initializer side effect must not guarantee mock on subsequent calls.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { static $m; $m = Mockery::mock(T::class); fakePure(); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'User-defined @pure function must invalidate static-local cells.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; class PureBase { public function f() { static $m; $m = Mockery::mock(T::class); $this->poke(); return $m::TAG; } }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Overridable @pure method must invalidate static-local cells.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f($evil) { static $m; $m = Mockery::mock(T::class); implode("", [$evil]); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Pure built-in with array/object argument must invalidate static-local cells.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f($evil) { static $m; $m = Mockery::mock(T::class); strlen($evil); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Pure built-in with variable argument must invalidate static-local cells.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { static $m; $m = Mockery::mock(T::class); strlen("a" . "b"); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Remove,
+        'Pure built-in with literal concatenation argument must preserve static-local mock.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f($cb) { static $m; $m = Mockery::mock(T::class); Mockery::mock(CtorInvoker::class, [$cb]); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Mockery::mock factory call must invalidate static-local cells.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f($cb) { $ct = Mockery::getContainer(); static $m; $m = Mockery::mock(T::class); $ct->mock(CtorInvoker::class, [$cb]); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Container::mock factory call must invalidate static-local cells.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f($cb) { static $m; $m = Mockery::mock(T::class); for ($i = 0; $i < 2; ++$i) { $r = $m::TAG; mock(CtorInvoker::class, [$cb]); } return $r; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Global mock helper inside loop must invalidate static-local cells.',
     );
 
     fwrite(STDOUT, "Provider type and signature checks passed.\n");

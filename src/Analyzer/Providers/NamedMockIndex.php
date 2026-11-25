@@ -13,10 +13,15 @@ use Mago\Sdk\Syntax\SourceFile;
 
 use function array_key_exists;
 use function array_values;
+use function count;
+use function in_array;
 use function ltrim;
+use function preg_match;
+use function preg_replace;
 use function str_starts_with;
 use function stripos;
 use function strlen;
+use function strpos;
 use function strtolower;
 use function substr;
 
@@ -25,6 +30,8 @@ use function substr;
  *
  * Cross-file `fetchMock()` calls remain unresolved; span collisions across files with
  * differing targets degrade conservatively to unresolved.
+ *
+ * @internal
  */
 final class NamedMockIndex implements CodebaseScanHook
 {
@@ -33,7 +40,14 @@ final class NamedMockIndex implements CodebaseScanHook
         'expects' => true,
         'shouldhavereceived' => true,
         'shouldnothavereceived' => true,
+        'shouldnotreceive' => true,
         'shouldreceive' => true,
+    ];
+
+    private const LIFECYCLE_METHODS = [
+        'setup' => true,
+        'startmockery' => true,
+        'mockerytestsetup' => true,
     ];
 
     /** @var array<string, list<string>|null> */
@@ -113,11 +127,14 @@ final class NamedMockIndex implements CodebaseScanHook
     }
 
     /**
-     * @return array<string, list<string>|null>
+     * @return array{
+     *     methods: array<string, array<string, list<string>|null>>,
+     *     lifecycle: array<string, array<string, list<string>|null>>
+     * }
      */
     private static function collectFileNamedMocks(SourceFile $source): array
     {
-        $aliases = [];
+        $aliases = ['methods' => [], 'lifecycle' => []];
 
         foreach ($source->getNodes(NodeKind::StaticMethodCall) as $call) {
             $method = self::calledStaticMethodName($source, $call);
@@ -142,7 +159,10 @@ final class NamedMockIndex implements CodebaseScanHook
     }
 
     /**
-     * @param array<string, list<string>|null> $aliases
+     * @param array{
+     *     methods: array<string, array<string, list<string>|null>>,
+     *     lifecycle: array<string, array<string, list<string>|null>>
+     * } $aliases
      */
     private static function extractNamedMockCall(SourceFile $source, Node $call, array &$aliases): void
     {
@@ -169,18 +189,27 @@ final class NamedMockIndex implements CodebaseScanHook
         }
 
         $resolved = $targets !== [] ? array_values($targets) : null;
-        if (array_key_exists($aliasName, $aliases)) {
-            if ($aliases[$aliasName] !== $resolved) {
-                $aliases[$aliasName] = null;
+        $callable = self::enclosingCallable($source, $call);
+        if ($callable === null) {
+            return;
+        }
+
+        $bucket = &self::aliasBucket($source, $call, $callable, $aliases);
+        if (array_key_exists($aliasName, $bucket)) {
+            if ($bucket[$aliasName] !== $resolved) {
+                $bucket[$aliasName] = null;
             }
             return;
         }
 
-        $aliases[$aliasName] = $resolved;
+        $bucket[$aliasName] = $resolved;
     }
 
     /**
-     * @param array<string, list<string>|null> $fileAliases
+     * @param array{
+     *     methods: array<string, array<string, list<string>|null>>,
+     *     lifecycle: array<string, array<string, list<string>|null>>
+     * } $fileAliases
      * @param array<string, list<string>|null> $fetchTargetsByKey
      * @param array<string, true> $ambiguousKeys
      */
@@ -222,7 +251,7 @@ final class NamedMockIndex implements CodebaseScanHook
                     continue;
                 }
 
-                $targets = $fileAliases[$fetchName] ?? null;
+                $targets = self::targetsForFetchInScope($source, $call, $fetchName, $fileAliases);
                 if (array_key_exists($key, $fetchTargetsByKey)) {
                     if ($fetchTargetsByKey[$key] !== $targets) {
                         $ambiguousKeys[$key] = true;
@@ -404,7 +433,7 @@ final class NamedMockIndex implements CodebaseScanHook
             }
 
             $factoryArgList = self::findChildOfKind($source, $receiver, NodeKind::ArgumentList);
-            if ($factoryArgList !== null && self::positionalArgumentValues($source, $factoryArgList) !== []) {
+            if (!self::isHigherOrderFactoryArgs($source, $factoryName, $factoryArgList)) {
                 continue;
             }
 
@@ -427,6 +456,157 @@ final class NamedMockIndex implements CodebaseScanHook
             }
             $allowedByKey[$key] = $allowed;
         }
+    }
+
+    /**
+     * @param array{
+     *     methods: array<string, array<string, list<string>|null>>,
+     *     lifecycle: array<string, array<string, list<string>|null>>
+     * } $aliases
+     * @return array<string, list<string>|null>
+     */
+    private static function &aliasBucket(SourceFile $source, Node $call, Node $callable, array &$aliases): array
+    {
+        if (self::isLifecycleCallable($source, $callable)) {
+            $classKey = self::enclosingClassKey($source, $call);
+            if ($classKey !== null) {
+                $aliases['lifecycle'][$classKey] ??= [];
+
+                return $aliases['lifecycle'][$classKey];
+            }
+        }
+
+        $methodKey = $callable->span->start . ':' . $callable->span->end;
+        $aliases['methods'][$methodKey] ??= [];
+
+        return $aliases['methods'][$methodKey];
+    }
+
+    /**
+     * @param array{
+     *     methods: array<string, array<string, list<string>|null>>,
+     *     lifecycle: array<string, array<string, list<string>|null>>
+     * } $fileAliases
+     * @return list<string>|null
+     */
+    private static function targetsForFetchInScope(
+        SourceFile $source,
+        Node $call,
+        string $fetchName,
+        array $fileAliases,
+    ): ?array {
+        $callable = self::enclosingCallable($source, $call);
+        if ($callable !== null) {
+            $methodKey = $callable->span->start . ':' . $callable->span->end;
+            if (array_key_exists($fetchName, $fileAliases['methods'][$methodKey] ?? [])) {
+                return $fileAliases['methods'][$methodKey][$fetchName];
+            }
+        }
+
+        $classKey = self::enclosingClassKey($source, $call);
+        if ($classKey !== null && array_key_exists($fetchName, $fileAliases['lifecycle'][$classKey] ?? [])) {
+            return $fileAliases['lifecycle'][$classKey][$fetchName];
+        }
+
+        return null;
+    }
+
+    private static function isHigherOrderFactoryArgs(SourceFile $source, string $factoryName, ?Node $argList): bool
+    {
+        if ($argList === null) {
+            return true;
+        }
+
+        $args = self::positionalArgumentValues($source, $argList);
+        if ($args === []) {
+            return true;
+        }
+
+        if (count($args) !== 1) {
+            return false;
+        }
+
+        $lower = strtolower($factoryName);
+        if (in_array($lower, ['expects', 'shouldhavereceived', 'shouldnothavereceived'], true)) {
+            return self::isNullLiteral($source, $args[0]);
+        }
+
+        if ($lower === 'allows') {
+            return self::isNullLiteral($source, $args[0]) || self::isEmptyArrayLiteral($source, $args[0]);
+        }
+
+        return false;
+    }
+
+    private static function isNullLiteral(SourceFile $source, Node $node): bool
+    {
+        $node = self::unwrap($source, $node);
+        if ($node === null) {
+            return false;
+        }
+
+        return strtolower(trim($source->getText($node))) === 'null';
+    }
+
+    private static function isEmptyArrayLiteral(SourceFile $source, Node $node): bool
+    {
+        $node = self::unwrap($source, $node);
+        if ($node === null) {
+            return false;
+        }
+
+        $text = preg_replace('/\s+/', '', $source->getText($node)) ?? '';
+
+        return $text === '[]' || strtolower($text) === 'array()';
+    }
+
+    private static function enclosingCallable(SourceFile $source, Node $node): ?Node
+    {
+        $current = $source->getParent($node);
+        while ($current !== null) {
+            if (
+                $current->kind === NodeKind::Method
+                || $current->kind === NodeKind::Function
+                || $current->kind === NodeKind::Closure
+                || $current->kind === NodeKind::ArrowFunction
+            ) {
+                return $current;
+            }
+            $current = $source->getParent($current);
+        }
+
+        return null;
+    }
+
+    private static function enclosingClassKey(SourceFile $source, Node $node): ?string
+    {
+        $current = $source->getParent($node);
+        while ($current !== null) {
+            if ($current->kind === NodeKind::Class_ || $current->kind === NodeKind::AnonymousClass) {
+                return $current->span->start . ':' . $current->span->end;
+            }
+            $current = $source->getParent($current);
+        }
+
+        return null;
+    }
+
+    private static function isLifecycleCallable(SourceFile $source, Node $callable): bool
+    {
+        if ($callable->kind !== NodeKind::Method) {
+            return false;
+        }
+
+        $text = $source->getText($callable);
+        $brace = strpos($text, '{');
+        $header = $brace === false ? $text : substr($text, 0, $brace);
+        if (preg_match('/function\s+(\w+)/i', $header, $matches) === 1) {
+            if (isset(self::LIFECYCLE_METHODS[strtolower($matches[1])])) {
+                return true;
+            }
+        }
+
+        return preg_match('/#\[\s*(?:\\\\?PHPUnit\\\\Framework\\\\Attributes\\\\)?Before\b/', $header) === 1;
     }
 
     private static function isMockeryStaticReceiver(SourceFile $source, Node $call): bool

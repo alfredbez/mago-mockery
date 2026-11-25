@@ -17,6 +17,8 @@ use Mago\Sdk\Analyzer\Type\SimpleAtomicTypeKind;
  *
  * The no-argument and explicit-null forms of shouldHaveReceived() / shouldNotHaveReceived()
  * return a HigherOrderMessage and belong to NoArgumentFactoryProvider.
+ *
+ * @internal
  */
 final class VerificationProvider implements MethodReturnTypeProvider
 {

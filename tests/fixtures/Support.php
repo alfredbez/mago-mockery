@@ -44,6 +44,34 @@ trait LoggableTrait
     }
 }
 
+/**
+ * @template T
+ */
+final class GenericBox
+{
+    /** @param T $value */
+    public function __construct(public mixed $value)
+    {
+    }
+
+    /** @return T */
+    public function get(): mixed
+    {
+        return $this->value;
+    }
+
+    /** @param T $next */
+    public function put(mixed $next): void
+    {
+        $this->value = $next;
+    }
+}
+
+#[\Attribute(\Attribute::TARGET_METHOD)]
+final class Before
+{
+}
+
 class Support
 {
     public function acceptGreeter(Greeter&MockInterface $greeter): void

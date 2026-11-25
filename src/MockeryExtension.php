@@ -10,7 +10,7 @@ use Mago\Sdk\Extension;
 
 final class MockeryExtension
 {
-    public const VERSION = '0.1.3';
+    public const VERSION = '1.0.0';
 
     private function __construct() {}
 

@@ -46,12 +46,12 @@ $expected = [
         'tests/fixtures/TraitConstantDominanceAndAliases.php' => [],
         'tests/fixtures/TraitConstantProvenance.php' => [
             'deprecated-method' => 2,
-            'mixed-assignment' => 2,
-            'mixed-return-statement' => 2,
-            'non-existent-method' => 1,
+            'mixed-assignment' => 1,
+            'mixed-return-statement' => 1,
             'redundant-null-coalesce' => 3,
         ],
         'tests/fixtures/Wave9FactoriesAndTraits.php' => [],
+        'tests/fixtures/Wave12Contracts.php' => [],
         'tests/fixtures/IntersectionControl.php' => [
             'invalid-argument' => 1,
         ],
@@ -66,8 +66,10 @@ $expected = [
         ],
         'tests/fixtures/Wave9FactoriesAndTraitsNegative.php' => [
             'direct-trait-constant-access' => 3,
-            'non-documented-method' => 2,
             'non-existent-method' => 6,
+        ],
+        'tests/fixtures/Wave12ContractsNegative.php' => [
+            'non-existent-method' => 4,
         ],
         'tests/fixtures/Negative.php' => [
             // direct trait constant access on non-mock $traitClass = LoggableTrait::class
@@ -144,6 +146,22 @@ $expected = [
             'possibly-invalid-argument' => 1,
             'redundant-null-coalesce' => 4,
         ],
+        'tests/fixtures/Wave12Contracts.php' => [
+            'invalid-property-assignment-value' => 1,
+            'mixed-assignment' => 4,
+            'mixed-method-access' => 2,
+            'mixed-operand' => 3,
+            'non-documented-method' => 7,
+            'non-existent-method' => 13,
+            'null-argument' => 1,
+            'possibly-invalid-argument' => 3,
+            'redundant-condition' => 1,
+            'too-many-arguments' => 1,
+            'unreachable-else-clause' => 1,
+        ],
+        'tests/fixtures/Wave12ContractsNegative.php' => [
+            'non-existent-method' => 4,
+        ],
         'tests/fixtures/Wave9FactoriesAndTraits.php' => [
             'impossible-assignment' => 5,
             'non-documented-method' => 8,
@@ -189,9 +207,8 @@ foreach ([
     ],
     'tests/fixtures/TraitConstantProvenance.php' => [
         'deprecated-method' => 2,
-        'mixed-assignment' => 2,
-        'mixed-return-statement' => 2,
-        'non-existent-method' => 1,
+        'mixed-assignment' => 1,
+        'mixed-return-statement' => 1,
         'redundant-null-coalesce' => 3,
     ],
     'tests/fixtures/TraitConstantProvenanceNegative.php' => [
@@ -473,9 +490,8 @@ $strictDefault = analyze(false, 'tests/strict-methods.toml');
 $strictEnabled = analyze(false, 'tests/strict-methods.toml', ['MAGO_MOCKERY_STRICT_METHODS' => '1']);
 $failures += assertHistograms('strict default mode', $strictDefault, [
     'tests/strict-fixtures/StrictMethods.php' => [],
-    'tests/strict-fixtures/Wave9StrictGaps.php' => [
-        'non-documented-method' => 4,
-    ],
+    'tests/strict-fixtures/Wave9StrictGaps.php' => [],
+    'tests/strict-fixtures/Wave12Strict.php' => [],
 ]);
 $failures += assertHistograms('strict enabled mode', $strictEnabled, [
     'tests/strict-fixtures/StrictMethods.php' => [
@@ -483,7 +499,9 @@ $failures += assertHistograms('strict enabled mode', $strictEnabled, [
     ],
     'tests/strict-fixtures/Wave9StrictGaps.php' => [
         'alfredbez/mockery/unknown-mocked-method' => 7,
-        'non-documented-method' => 4,
+    ],
+    'tests/strict-fixtures/Wave12Strict.php' => [
+        'alfredbez/mockery/unknown-mocked-method' => 1,
     ],
 ]);
 foreach ([
@@ -504,6 +522,22 @@ foreach ([
         1,
     );
 }
+$failures += assertMessageCount(
+    'strict enabled mode',
+    $strictEnabled,
+    'tests/strict-fixtures/Wave12Strict.php',
+    'alfredbez/mockery/unknown-mocked-method',
+    'Method `missing` does not exist on mocked type `MockeryFixture\\Strict\\StrictGreeter`',
+    1,
+);
+$failures += assertMessageCount(
+    'strict enabled mode',
+    $strictEnabled,
+    'tests/strict-fixtures/Wave12Strict.php',
+    'non-documented-method',
+    'missing',
+    0,
+);
 foreach ([
     'Method `missingOnClassString` does not exist on type `MockeryFixture\\Greeter`',
     'Method `missingOnNamedFetch` does not exist on type `MockeryFixture\\Greeter`',

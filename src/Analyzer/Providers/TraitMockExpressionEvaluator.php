@@ -20,6 +20,8 @@ use function substr;
 /**
  * @phpstan-import-type CellValue from TraitMockAliasState
  * @phpstan-type CallArgument array{name: ?string, unpacked: bool, start: int, end: int, bareVar: ?string}
+ *
+ * @internal
  */
 final class TraitMockExpressionEvaluator
 {
@@ -27,7 +29,7 @@ final class TraitMockExpressionEvaluator
         'allows' => true, 'andanyotherargs' => true, 'andanyothers' => true, 'andreturn' => true,
         'andreturnarg' => true, 'andreturnnull' => true, 'andreturnself' => true, 'andreturnusing' => true,
         'andreturnvalues' => true, 'andset' => true, 'andthrow' => true, 'any' => true, 'anyof' => true,
-        'atleast' => true, 'atmost' => true, 'between' => true, 'bydefault' => true, 'close' => true,
+        'asundefined' => true, 'atleast' => true, 'atmost' => true, 'between' => true, 'bydefault' => true, 'close' => true,
         'contains' => true, 'ducktype' => true, 'expects' => true, 'fetchmock' => true,
         'getcontainer' => true, 'getmock' => true, 'globally' => true, 'haskey' => true, 'hasvalue' => true,
         'instancemock' => true, 'makepartial' => true, 'mock' => true, 'mustbe' => true, 'namedmock' => true,
@@ -41,7 +43,7 @@ final class TraitMockExpressionEvaluator
     ];
 
     private const SAFE_MOCK_OBJECT_METHODS = [
-        'allows' => true, 'bydefault' => true, 'expects' => true, 'makepartial' => true,
+        'allows' => true, 'asundefined' => true, 'bydefault' => true, 'expects' => true, 'makepartial' => true,
         'shouldallowmockingmethod' => true, 'shouldallowmockingprotectedmethods' => true,
         'shoulddefermissing' => true, 'shouldhavereceived' => true, 'shouldignoremissing' => true,
         'shouldnothavereceived' => true, 'shouldnotreceive' => true, 'shouldreceive' => true,
@@ -49,7 +51,7 @@ final class TraitMockExpressionEvaluator
     private const FACTORY_METHODS = ['mock' => true, 'spy' => true, 'namedmock' => true, 'instancemock' => true];
     private const HELPER_FUNCTIONS = ['mock' => true, 'spy' => true, 'namedmock' => true];
     private const FLUENT_PRESERVING_METHODS = [
-        'bydefault' => true, 'makepartial' => true, 'shouldallowmockingmethod' => true,
+        'asundefined' => true, 'bydefault' => true, 'makepartial' => true, 'shouldallowmockingmethod' => true,
         'shouldallowmockingprotectedmethods' => true, 'shoulddefermissing' => true, 'shouldignoremissing' => true,
     ];
     private const PREFIX_UNARY_TOKENS = [

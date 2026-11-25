@@ -16,6 +16,8 @@ use function ltrim;
 use function str_contains;
 use function str_starts_with;
 use function strlen;
+use function preg_match;
+use function preg_replace;
 use function strpos;
 use function strtolower;
 use function substr;
@@ -25,10 +27,13 @@ use function substr;
  *
  * Tracks receiver identity across variable aliases and kills stale allowances on reassignment
  * or across control-flow splits where the allowance does not dominate the call site.
+ *
+ * @internal
  */
 final class StrictAllowanceResolver
 {
     private const FLUENT_PRESERVING_METHODS = [
+        'asundefined' => true,
         'bydefault' => true,
         'makepartial' => true,
         'shouldallowmockingmethod' => true,
@@ -101,11 +106,30 @@ final class StrictAllowanceResolver
             $current = self::unwrap($source, $source->getChildren($current)[0] ?? null);
         }
 
-        if ($current === null || $current->kind !== NodeKind::DirectVariable) {
+        if ($current === null) {
             return null;
         }
 
-        return $source->getText($current);
+        return self::identityKey($source, $current);
+    }
+
+    private static function identityKey(SourceFile $source, Node $node): ?string
+    {
+        $unwrapped = self::unwrap($source, $node);
+        if ($unwrapped === null) {
+            return null;
+        }
+
+        if ($unwrapped->kind === NodeKind::DirectVariable) {
+            return $source->getText($unwrapped);
+        }
+
+        $text = preg_replace('/\s+/', '', $source->getText($unwrapped)) ?? '';
+        if (preg_match('/^\$this->([A-Za-z_][A-Za-z0-9_]*)$/', $text) === 1) {
+            return $text;
+        }
+
+        return null;
     }
 
     /**
@@ -598,12 +622,11 @@ final class StrictAllowanceResolver
             return;
         }
 
-        if ($lhsUnwrapped->kind !== NodeKind::DirectVariable) {
+        $lhsVar = self::identityKey($source, $lhsUnwrapped);
+        if ($lhsVar === null) {
             self::killWrittenVariables($source, $lhsUnwrapped, $state, $nextId);
             return;
         }
-
-        $lhsVar = $source->getText($lhsUnwrapped);
         $isByRef = self::isByReferenceAssignment($source, $assignment, $op, $rhsNode);
         if ($isByRef && $rhsNode !== null) {
             self::detachRef($state, $lhsVar);
@@ -678,15 +701,15 @@ final class StrictAllowanceResolver
             return null;
         }
 
-        if ($rhs->kind === NodeKind::DirectVariable) {
-            return $source->getText($rhs);
+        $direct = self::identityKey($source, $rhs);
+        if ($direct !== null) {
+            return $direct;
         }
 
         if ($rhs->kind === NodeKind::Assignment) {
             $lhs = self::unwrap($source, $source->getChildren($rhs)[0] ?? null);
-            return $lhs !== null && $lhs->kind === NodeKind::DirectVariable
-                ? $source->getText($lhs)
-                : null;
+
+            return $lhs !== null ? self::identityKey($source, $lhs) : null;
         }
 
         $current = $rhs;
@@ -698,11 +721,7 @@ final class StrictAllowanceResolver
             $current = self::unwrap($source, $source->getChildren($current)[0] ?? null);
         }
 
-        if ($current !== null && $current->kind === NodeKind::DirectVariable) {
-            return $source->getText($current);
-        }
-
-        return null;
+        return $current !== null ? self::identityKey($source, $current) : null;
     }
 
     /**
@@ -763,8 +782,8 @@ final class StrictAllowanceResolver
                 continue;
             }
             $lhsUnwrapped = self::unwrap($source, $lhs);
-            if ($lhsUnwrapped !== null && $lhsUnwrapped->kind === NodeKind::DirectVariable) {
-                $lhsVar = $source->getText($lhsUnwrapped);
+            $lhsVar = $lhsUnwrapped !== null ? self::identityKey($source, $lhsUnwrapped) : null;
+            if ($lhsVar !== null) {
                 if (self::isByReferenceAssignment($source, $assignment, $op, $rhs) && $rhs !== null) {
                     $refTarget = self::extractReferenceTargetVar($source, $rhs);
                     if ($refTarget !== null) {

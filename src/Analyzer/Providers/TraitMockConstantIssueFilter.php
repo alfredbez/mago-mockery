@@ -16,6 +16,8 @@ use function strlen;
 /**
  * Suppresses Mago's native `direct-trait-constant-access` when a constant is accessed
  * through a receiver guaranteed on every reachable path to be a Mockery mock object.
+ *
+ * @internal
  */
 final class TraitMockConstantIssueFilter implements IssueFilterHook
 {

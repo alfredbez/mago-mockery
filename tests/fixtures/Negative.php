@@ -7,13 +7,6 @@ namespace MockeryFixture;
 use Mockery;
 use Mockery\Expectation;
 
-/**
- * The intersection must narrow, not silence. Each case states its expectation.
- *
- * Known boundary: literal method names passed to `shouldReceive('doesNotExist')`
- * or HigherOrderMessage (`shouldReceive()->doesNotExist()`) are not validated
- * against the mocked class's method list.
- */
 final class Negative extends Support
 {
     /**

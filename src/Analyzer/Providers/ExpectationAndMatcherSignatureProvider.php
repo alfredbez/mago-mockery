@@ -12,17 +12,21 @@ use Mago\Sdk\Analyzer\MethodTarget;
 use Mago\Sdk\Analyzer\ReturnTypeProviderContext;
 use Mago\Sdk\Analyzer\Type;
 use Mago\Sdk\Analyzer\Type\CallableParameter;
+use Mago\Sdk\Analyzer\Type\NamedObjectType;
 
 /**
  * Refines inaccurate or overly wide Mockery 1.6 parameter docblocks on
  * Expectation, VerificationDirector, and Mockery argument matcher factories.
+ *
+ * @internal
  */
 final class ExpectationAndMatcherSignatureProvider implements MethodReturnTypeProvider, CallableSignatureOverride
 {
     public function getTargets(): array
     {
-        return [
+        $targets = [
             MethodTarget::exact('Mockery\\Expectation', 'andSet'),
+            MethodTarget::exact('Mockery\\Expectation', 'set'),
             MethodTarget::exact('Mockery\\Expectation', 'andReturnArg'),
             MethodTarget::exact('Mockery\\VerificationDirector', 'withArgs'),
             MethodTarget::exact('Mockery', 'type'),
@@ -31,7 +35,20 @@ final class ExpectationAndMatcherSignatureProvider implements MethodReturnTypePr
             MethodTarget::exact('Mockery', 'hasKey'),
             MethodTarget::exact('Mockery', 'isEqual'),
             MethodTarget::exact('Mockery', 'isSame'),
+            MethodTarget::exact('Mockery', 'fetchMock'),
+            MethodTarget::exact('Mockery\\Container', 'fetchMock'),
         ];
+
+        foreach (['Mockery\\Mock', 'Mockery\\MockInterface', 'Mockery\\LegacyMockInterface'] as $class) {
+            $targets[] = MethodTarget::exact($class, 'shouldIgnoreMissing');
+            $targets[] = MethodTarget::exact($class, 'asUndefined');
+        }
+
+        // asUndefined() is declared on Mockery\Mock, not MockInterface. T&MockInterface
+        // therefore looks up the call on T. anyClass() is the only target that fires.
+        $targets[] = MethodTarget::anyClass('asUndefined');
+
+        return $targets;
     }
 
     public function getCallableSignature(CallableSignatureProviderContext $context): ?EffectiveCallableSignature
@@ -41,13 +58,13 @@ final class ExpectationAndMatcherSignatureProvider implements MethodReturnTypePr
 
         if ($class === 'mockery\\expectation') {
             return match ($method) {
-                'andset' => new EffectiveCallableSignature(
+                'andset', 'set' => new EffectiveCallableSignature(
                     parameters: [
                         new CallableParameter(name: '$name', type: Type::string()),
                         new CallableParameter(name: '$values', type: Type::mixed(), variadic: true),
                     ],
                     allowsNamedArguments: true,
-                    displayName: 'Mockery\\Expectation::andSet',
+                    displayName: 'Mockery\\Expectation::' . $context->invocation->name,
                 ),
                 'andreturnarg' => new EffectiveCallableSignature(
                     parameters: [
@@ -55,6 +72,34 @@ final class ExpectationAndMatcherSignatureProvider implements MethodReturnTypePr
                     ],
                     allowsNamedArguments: true,
                     displayName: 'Mockery\\Expectation::andReturnArg',
+                ),
+                default => null,
+            };
+        }
+
+        if ($method === 'asundefined' && self::isMockReceiver($context->invocation->receiverType)) {
+            return new EffectiveCallableSignature(
+                parameters: [],
+                allowsNamedArguments: true,
+                displayName: 'Mockery\\Mock::asUndefined',
+            );
+        }
+
+        if (in_array($class, ['mockery\\mock', 'mockery\\mockinterface', 'mockery\\legacymockinterface'], true)) {
+            return match ($method) {
+                'shouldignoremissing' => new EffectiveCallableSignature(
+                    parameters: [
+                        new CallableParameter(name: '$returnValue', type: Type::mixed(), hasDefault: true),
+                        new CallableParameter(name: '$recursive', type: Type::bool(), hasDefault: true),
+                    ],
+                    allowsNamedArguments: true,
+                    displayName: ($context->invocation->declaringClass ?? 'Mockery\\LegacyMockInterface')
+                        . '::shouldIgnoreMissing',
+                ),
+                'asundefined' => new EffectiveCallableSignature(
+                    parameters: [],
+                    allowsNamedArguments: true,
+                    displayName: ($context->invocation->declaringClass ?? 'Mockery\\MockInterface') . '::asUndefined',
                 ),
                 default => null,
             };
@@ -73,6 +118,18 @@ final class ExpectationAndMatcherSignatureProvider implements MethodReturnTypePr
                 ],
                 allowsNamedArguments: true,
                 displayName: 'Mockery\\VerificationDirector::withArgs',
+            );
+        }
+
+        if ($method === 'fetchmock') {
+            $parameterName = $class === 'mockery\\container' ? '$reference' : '$name';
+
+            return new EffectiveCallableSignature(
+                parameters: [
+                    new CallableParameter(name: $parameterName, type: Type::string()),
+                ],
+                allowsNamedArguments: true,
+                displayName: ($context->invocation->declaringClass ?? 'Mockery') . '::fetchMock',
             );
         }
 
@@ -115,14 +172,65 @@ final class ExpectationAndMatcherSignatureProvider implements MethodReturnTypePr
 
     public function getReturnType(ReturnTypeProviderContext $context): ?Type
     {
-        if (strtolower($context->invocation->declaringClass ?? '') !== 'mockery') {
+        $class = strtolower($context->invocation->declaringClass ?? '');
+        $method = strtolower($context->invocation->name);
+
+        if ($method === 'asundefined' && self::isMockReceiver($context->invocation->receiverType)) {
+            return $context->invocation->receiverType;
+        }
+
+        if (in_array($class, ['mockery\\mock', 'mockery\\mockinterface', 'mockery\\legacymockinterface'], true)) {
+            if ($method === 'asundefined' || $method === 'shouldignoremissing') {
+                return $context->invocation->receiverType;
+            }
+
             return null;
         }
 
-        return match (strtolower($context->invocation->name)) {
+        if ($class !== 'mockery') {
+            return null;
+        }
+
+        return match ($method) {
             'isequal' => Type::namedObject('Mockery\\Matcher\\IsEqual'),
             'issame' => Type::namedObject('Mockery\\Matcher\\IsSame'),
             default => null,
         };
+    }
+
+    private static function isMockReceiver(?Type $receiverType): bool
+    {
+        if ($receiverType === null) {
+            return false;
+        }
+
+        foreach ($receiverType->atomicTypes as $atomic) {
+            if (self::namedObjectIsMockeryMock($atomic)) {
+                return true;
+            }
+
+            if ($atomic instanceof NamedObjectType) {
+                foreach ($atomic->intersections ?? [] as $intersection) {
+                    if (self::namedObjectIsMockeryMock($intersection)) {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        return false;
+    }
+
+    private static function namedObjectIsMockeryMock(object $atomic): bool
+    {
+        if (!$atomic instanceof NamedObjectType) {
+            return false;
+        }
+
+        $lower = strtolower($atomic->name);
+
+        return $lower === 'mockery\\mock'
+            || $lower === 'mockery\\mockinterface'
+            || $lower === 'mockery\\legacymockinterface';
     }
 }

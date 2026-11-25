@@ -1,0 +1,18 @@
+{
+    "max_errors": 12,
+    "by_code": {
+        "conflicting-reference-constraint": 4,
+        "impossible-assignment": 1,
+        "invalid-iterator": 1,
+        "invalid-return-statement": 2,
+        "invalid-type-cast": 1,
+        "mixed-array-index": 2,
+        "null-iterator": 1,
+        "possibly-invalid-array-access": 1,
+        "redundant-comparison": 1,
+        "redundant-condition": 1,
+        "redundant-null-coalesce": 2,
+        "reference-to-undefined-variable": 1,
+        "undefined-string-array-index": 1
+    }
+}

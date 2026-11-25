@@ -38,7 +38,8 @@
             "@test:runtime"
         ],
         "test:analyzer": "php tests/run.php",
-        "test:runtime": "vendor/bin/phpunit tests/runtime"
+        "test:runtime": "vendor/bin/phpunit tests/runtime",
+        "test:syntax": "find src bin -name '*.php' -print0 | xargs -0 -n1 php -l"
     },
     "config": {
         "sort-packages": true,

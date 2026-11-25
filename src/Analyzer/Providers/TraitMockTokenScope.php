@@ -31,6 +31,8 @@ use function substr;
  *     paramsEnd: ?int,
  *     enclosingClass: ?string
  * }
+ *
+ * @internal
  */
 final class TraitMockTokenScope
 {

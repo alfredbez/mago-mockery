@@ -24,6 +24,9 @@ use function in_array;
 use function strtolower;
 use function trim;
 
+/**
+ * @internal
+ */
 final class MockeryPlugin implements Plugin
 {
     public const STRICT_METHODS_ENV = 'MAGO_MOCKERY_STRICT_METHODS';

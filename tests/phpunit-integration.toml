@@ -11,5 +11,5 @@ find-unused-expressions = false
 check-property-initialization = true
 
 [extension-hosts.mockery]
-command = ["php", "worker.php"]
+command = ["php", "-d", "xdebug.mode=off", "-d", "pcov.enabled=0", "../bin/mago-mockery-worker"]
 workers = 1

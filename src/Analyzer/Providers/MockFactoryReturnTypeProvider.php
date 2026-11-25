@@ -16,6 +16,8 @@ use Mago\Sdk\Analyzer\Type;
  * `@param array<class-string<TMock>|...> $args`. Deriving TMock needs template
  * inference from a variadic array element, which Mago does not do, so the
  * extension supplies the intersection directly.
+ *
+ * @internal
  */
 final class MockFactoryReturnTypeProvider implements MethodReturnTypeProvider
 {

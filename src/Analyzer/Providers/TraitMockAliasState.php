@@ -11,6 +11,8 @@ use function implode;
 /**
  * @phpstan-type CellValue array{mock: bool, container: bool, null: bool, mockOrNull: bool}
  * @phpstan-type CellRecord array{mock: bool, container: bool, null: bool, mockOrNull: bool, escaped: bool, staticLocal: bool}
+ *
+ * @internal
  */
 final class TraitMockAliasState
 {

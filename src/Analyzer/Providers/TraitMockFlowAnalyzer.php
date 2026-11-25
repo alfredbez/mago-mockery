@@ -12,6 +12,9 @@ use function preg_match;
 use function str_replace;
 use function strtolower;
 
+/**
+ * @internal
+ */
 final class TraitMockFlowAnalyzer
 {
     private const COMPOUND_ASSIGN_TOKENS = [

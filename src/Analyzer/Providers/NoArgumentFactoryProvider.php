@@ -26,6 +26,8 @@ use Mago\Sdk\Analyzer\Type\SimpleAtomicTypeKind;
  * `shouldHaveReceived()` / `shouldHaveReceived(null)`, and `shouldNotHaveReceived()` /
  * `shouldNotHaveReceived(null)` return a HigherOrderMessage (or ExpectsHigherOrderMessage)
  * parameterized with the forwarded call's runtime return type.
+ *
+ * @internal
  */
 final class NoArgumentFactoryProvider implements MethodReturnTypeProvider, CallableSignatureOverride
 {
@@ -112,6 +114,11 @@ final class NoArgumentFactoryProvider implements MethodReturnTypeProvider, Calla
             default => CompositeExpectationProvider::typeWithMock($mockType),
         };
 
+        return self::higherOrderType($lower, $forwardedReturnType, $mockType);
+    }
+
+    public static function higherOrderType(string $lower, Type $forwardedReturnType, ?Type $mockType): Type
+    {
         $class = $lower === 'expects'
             ? 'Mockery\\ExpectsHigherOrderMessage'
             : 'Mockery\\HigherOrderMessage';
@@ -147,7 +154,7 @@ final class NoArgumentFactoryProvider implements MethodReturnTypeProvider, Calla
         }
 
         if ($lower === 'allows') {
-            return self::isEmptyArrayType($firstType);
+            return self::isNullType($firstType) || self::isEmptyArrayType($firstType);
         }
 
         return false;

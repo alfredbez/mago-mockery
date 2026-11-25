@@ -12,6 +12,8 @@ use Mago\Sdk\Analyzer\Metadata\MemberIdentifier;
 /**
  * Recognizes Mockery PHPUnit lifecycle initializers (`mockeryTestSetUp`, `startMockery`, `setUp`)
  * on MockeryTestCase subclasses and TestCase classes using MockeryPHPUnitIntegration.
+ *
+ * @internal
  */
 final class MockeryPhpUnitInitializer implements ClassInitializerProvider
 {

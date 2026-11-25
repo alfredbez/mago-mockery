@@ -6,6 +6,22 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-25
+
+### Added
+
+- Compatibility and SemVer policy in the README covering the public PHP API, worker binary, diagnostic codes, default-on versus opt-in checks, suppression, and supported PHP, Mago, and Mockery floors.
+- Floor-compatible CI lanes for PHP 8.1 and 8.2, full analyzer and runtime suites on PHP 8.3 through 8.5, and pinned Mago `1.60.2`, `1.61.0`, and `latest` jobs, including bounded self-analysis of `src/` and `bin/`.
+- `[extension-hosts.mockery] environment` documentation for `MAGO_MOCKERY_STRICT_METHODS`.
+
+### Fixed
+
+- Mock factory return types keep generic parameters from object partials (`Mockery::mock(new GenericBox('hello'))`) and `class-string<T>` arguments (`class-string<GenericBox<string>>`).
+- Mockery 1.6 signature mismatches: `shouldIgnoreMissing(null, true)`, `asUndefined()`, `Expectation::set()` variadic values, `allows(null)` higher-order form, possibly-empty `allows($map)` return type `HigherOrderMessage|(T&MockInterface)`, and `fetchMock(string)` versus Mockery's `class-string` docblock.
+- Higher-order `shouldNotReceive()`, `allows([])`, `expects(null)`, `shouldHaveReceived(null)`, and `shouldNotHaveReceived(null)` honor `shouldAllowMockingMethod()`, including allowances on `$this->property`.
+- Strict mode reports exactly one `alfredbez/mockery/unknown-mocked-method` diagnostic for an unknown higher-order call instead of cascading `non-documented-method`.
+- `Mockery::fetchMock()` resolves `namedMock()` aliases from the same method or from the enclosing class `setUp()`, `startMockery()`, `mockeryTestSetUp()`, and `#[Before]` hooks, and no longer leaks aliases from sibling test methods or other classes in the same file.
+
 ## [0.1.3] - 2026-11-25
 
 ### Fixed

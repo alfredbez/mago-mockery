@@ -176,6 +176,14 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
         $check($andSet->parameters[0]->name === '$name', 'An existing parameter dollar prefix must remain unchanged.');
     }
 
+    $cache->values[$bucket]["mockery\\expectation\0set"] = $method('set', [
+        $parameter('$name', Type::string()),
+        $parameter('value', Type::mixed()),
+    ]);
+    $setSignature = $signature($codebase, 'set');
+    $check((string) $setSignature->parameters[0]->type === 'string', 'set must retain the property name type.');
+    $check((string) $setSignature->parameters[1]->type === 'mixed' && $setSignature->parameters[1]->variadic, 'set must accept mixed variadic values like andSet.');
+
     $typedClassString = Type::fromAtomic(new ScalarType(
         ScalarTypeKind::ClassLikeString,
         new ClassLikeStringType(
@@ -202,6 +210,30 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
         $codebase,
     );
     $check($fromBareClassString === null, 'Bare class-string must stay unresolved.');
+
+    $genericClassString = Type::fromAtomic(new ScalarType(
+        ScalarTypeKind::ClassLikeString,
+        new ClassLikeStringType(
+            variant: ClassLikeStringVariant::OfType,
+            kind: ClassLikeStringKind::Class_,
+            constraint: new NamedObjectType('Alpha', [Type::string()], null, false, false, null, false),
+        ),
+    ));
+    $fromGenericClassString = MockTypeFactory::fromInvocation(
+        new Invocation(InvocationKind::StaticMethod, 'mock', 'Mockery', Type::namedObject('Mockery'), $span, [
+            new Argument(null, false, false, $span, '$cls', $genericClassString),
+        ]),
+        $codebase,
+    );
+    $genericPrimary = $fromGenericClassString?->atomicTypes[0] ?? null;
+    $check(
+        $genericPrimary instanceof NamedObjectType
+        && $genericPrimary->name === 'Alpha'
+        && $genericPrimary->parameters !== null
+        && isset($genericPrimary->parameters[0])
+        && (string) $genericPrimary->parameters[0] === 'string',
+        'class-string<Alpha<string>> must keep the generic parameter on Alpha&MockInterface.',
+    );
 
     $cache->values[Protocol::GET_CLASS_LIKES << 4]['alpha'] = new ClassLikeMetadata(
         name: 'Alpha',
@@ -265,7 +297,7 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
         new TypeComparator($host, 1, $cancellation),
         $cancellation,
     ));
-    $check($hoMissing === null, 'Higher-order provider must leave unknown methods unresolved.');
+    $check($hoMissing !== null, 'Higher-order provider must forward unknown methods so native diagnostics do not cascade.');
     $hoMissingSig = $higher->getCallableSignature(new CallableSignatureProviderContext(
         PHPVersion::fromParts(8, 4),
         $codebase,
@@ -273,7 +305,7 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
         new TypeComparator($host, 1, $cancellation),
         $cancellation,
     ));
-    $check($hoMissingSig === null, 'Higher-order signature provider must leave unknown methods unresolved.');
+    $check($hoMissingSig !== null, 'Higher-order signature provider must forward unknown methods.');
 
     $traitFilter = new TraitMockConstantIssueFilter();
     $filterDecision = static function (string $code, string $needle) use ($traitFilter, $codebase, $host, $cancellation): IssueFilterDecision {

@@ -37,6 +37,8 @@ use WeakMap;
  * `shouldNotReceive`) keep their real signatures and return types. Methods
  * forwarded through `__call()` are resolved against `Mockery\Expectation` so
  * unknown methods and invalid argument types are still reported.
+ *
+ * @internal
  */
 final class CompositeExpectationProvider implements MethodReturnTypeProvider, CallableSignatureProvider
 {
@@ -97,6 +99,17 @@ final class CompositeExpectationProvider implements MethodReturnTypeProvider, Ca
         if ($expectationMethod->parameters === []) {
             return new EffectiveCallableSignature(
                 parameters: [],
+                allowsNamedArguments: true,
+                displayName: self::COMPOSITE . '::' . $methodName,
+            );
+        }
+
+        if ($lower === 'set') {
+            return new EffectiveCallableSignature(
+                parameters: [
+                    new CallableParameter(name: '$name', type: Type::string()),
+                    new CallableParameter(name: '$values', type: Type::mixed(), variadic: true),
+                ],
                 allowsNamedArguments: true,
                 displayName: self::COMPOSITE . '::' . $methodName,
             );
@@ -195,6 +208,19 @@ final class CompositeExpectationProvider implements MethodReturnTypeProvider, Ca
                 return $context->invocation->receiverType;
             }
 
+            if ($first->type !== null && self::isPossiblyEmptyArrayType($first->type)) {
+                $mockType = $context->invocation->receiverType;
+
+                return Type::union(
+                    NoArgumentFactoryProvider::higherOrderType(
+                        'allows',
+                        self::typeWithMock($mockType),
+                        $mockType,
+                    ),
+                    $mockType ?? Type::namedObject(MockTypeFactory::MOCK_INTERFACE),
+                );
+            }
+
             return null;
         }
 
@@ -289,6 +315,35 @@ final class CompositeExpectationProvider implements MethodReturnTypeProvider, Ca
 
             if ($atomic instanceof ListType) {
                 if (!$atomic->nonEmpty && ($atomic->knownCount === null || $atomic->knownCount === 0)) {
+                    return false;
+                }
+
+                continue;
+            }
+
+            return false;
+        }
+
+        return true;
+    }
+
+    private static function isPossiblyEmptyArrayType(Type $type): bool
+    {
+        if (self::isNonEmptyArrayType($type)) {
+            return false;
+        }
+
+        foreach ($type->atomicTypes as $atomic) {
+            if ($atomic instanceof ListType) {
+                if ($atomic->knownCount === 0) {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if ($atomic instanceof KeyedArrayType) {
+                if ($atomic->keyType === null && ($atomic->knownItems === null || $atomic->knownItems === [])) {
                     return false;
                 }
 

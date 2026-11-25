@@ -30,6 +30,8 @@ use function strtolower;
 /**
  * Opt-in check (`MAGO_MOCKERY_STRICT_METHODS=1`) that validates literal and higher-order
  * method names passed to Mockery expectation and verification calls against the mocked target class.
+ *
+ * @internal
  */
 final class StrictMockedMethodHook implements MethodCallAnalysisHook
 {

@@ -23,6 +23,8 @@ use Mago\Sdk\Analyzer\Type\CallableParameter;
  * Resolves span-dependent Mockery patterns (`fetchMock()` against same-file `namedMock()`
  * and higher-order forwarding calls explicitly allowed via `shouldAllowMockingMethod()`)
  * without disabling provider memoization on the main Mockery plugin.
+ *
+ * @internal
  */
 final class NamedFetchMockPlugin implements Plugin, MethodReturnTypeProvider, CallableSignatureProvider
 {

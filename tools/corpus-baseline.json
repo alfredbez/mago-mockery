@@ -19,9 +19,28 @@
                 "non-documented-method": 4
             }
         },
+        "laravel:strict": {
+            "ref": "v12.73.0",
+            "eliminated_count": 154,
+            "eliminated_by_code": {
+                "invalid-argument": 7,
+                "mixed-argument": 2,
+                "mixed-assignment": 1,
+                "non-existent-method": 14,
+                "non-existent-property": 4,
+                "possibly-invalid-argument": 126
+            },
+            "added_by_code": {
+                "alfredbez/mockery/unknown-mocked-method": 41,
+                "invalid-argument": 3,
+                "invalid-method-access": 1,
+                "mixed-argument": 2,
+                "non-documented-method": 4
+            }
+        },
         "mockery": {
             "ref": "1.6.15",
-            "eliminated_count": 303,
+            "eliminated_count": 314,
             "eliminated_by_code": {
                 "impossible-type-comparison": 2,
                 "invalid-argument": 20,
@@ -29,10 +48,10 @@
                 "less-specific-nested-argument-type": 1,
                 "mixed-assignment": 1,
                 "mixed-method-access": 7,
-                "no-value": 7,
+                "no-value": 8,
                 "non-documented-method": 38,
-                "non-existent-class-constant": 7,
-                "non-existent-method": 188,
+                "non-existent-class-constant": 8,
+                "non-existent-method": 197,
                 "non-existent-property": 10,
                 "possible-method-access-on-null": 3,
                 "possibly-invalid-argument": 7,
@@ -46,10 +65,44 @@
                 "less-specific-nested-argument-type": 1,
                 "mixed-assignment": 2,
                 "non-documented-method": 5,
-                "non-existent-method": 29,
+                "non-existent-method": 28,
                 "non-existent-property": 3,
                 "possibly-invalid-argument": 1,
-                "too-many-arguments": 8
+                "too-many-arguments": 6
+            }
+        },
+        "mockery:strict": {
+            "ref": "1.6.15",
+            "eliminated_count": 314,
+            "eliminated_by_code": {
+                "impossible-type-comparison": 2,
+                "invalid-argument": 20,
+                "invalid-type-cast": 4,
+                "less-specific-nested-argument-type": 1,
+                "mixed-assignment": 1,
+                "mixed-method-access": 7,
+                "no-value": 8,
+                "non-documented-method": 38,
+                "non-existent-class-constant": 8,
+                "non-existent-method": 197,
+                "non-existent-property": 10,
+                "possible-method-access-on-null": 3,
+                "possibly-invalid-argument": 7,
+                "redundant-docblock-type": 1,
+                "too-few-arguments": 7
+            },
+            "added_by_code": {
+                "alfredbez/mockery/unknown-mocked-method": 9,
+                "invalid-argument": 7,
+                "invalid-method-access": 6,
+                "invalid-type-cast": 2,
+                "less-specific-nested-argument-type": 1,
+                "mixed-assignment": 2,
+                "non-documented-method": 5,
+                "non-existent-method": 28,
+                "non-existent-property": 3,
+                "possibly-invalid-argument": 1,
+                "too-many-arguments": 6
             }
         }
     }

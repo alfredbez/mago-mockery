@@ -11,6 +11,8 @@ use Mago\Sdk\Analyzer\Type;
 
 /**
  * The global mock(), spy() and namedMock() helpers forward to Mockery::mock().
+ *
+ * @internal
  */
 final class MockHelperFunctionReturnTypeProvider implements FunctionReturnTypeProvider
 {

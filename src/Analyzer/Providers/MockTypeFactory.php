@@ -9,11 +9,15 @@ use Mago\Sdk\Analyzer\Invocation;
 use Mago\Sdk\Analyzer\Metadata\ClassLikeMetadata;
 use Mago\Sdk\Analyzer\Metadata\MemberIdentifier;
 use Mago\Sdk\Analyzer\Type;
+use Mago\Sdk\Analyzer\Type\AtomicType;
 use Mago\Sdk\Analyzer\Type\ClassLikeStringType;
 use Mago\Sdk\Analyzer\Type\ClassLikeStringVariant;
+use Mago\Sdk\Analyzer\Type\KeyedArrayType;
+use Mago\Sdk\Analyzer\Type\ListType;
 use Mago\Sdk\Analyzer\Type\NamedObjectType;
 use Mago\Sdk\Analyzer\Type\ScalarType;
 use Mago\Sdk\Analyzer\Type\ScalarTypeKind;
+use Mago\Sdk\Analyzer\Type\SimpleAtomicType;
 
 /**
  * Builds `Foo&MockInterface` for a mocked class name.
@@ -21,6 +25,8 @@ use Mago\Sdk\Analyzer\Type\ScalarTypeKind;
  * The SDK has no Type::intersection() helper. A named object whose
  * `intersections` list carries the remaining members is the encoding Mago
  * compares and resolves members through.
+ *
+ * @internal
  */
 final class MockTypeFactory
 {
@@ -141,7 +147,7 @@ final class MockTypeFactory
     }
 
     /**
-     * @return list<string>
+     * @return list<NamedObjectType>
      */
     private static function extractClassStringTargets(Type $type): array
     {
@@ -172,10 +178,10 @@ final class MockTypeFactory
             return [];
         }
 
-        $targets = [$constraint->name];
+        $targets = [$constraint];
         foreach ($constraint->intersections ?? [] as $intersection) {
             if ($intersection instanceof NamedObjectType) {
-                $targets[] = $intersection->name;
+                $targets[] = $intersection;
             }
         }
 
@@ -183,7 +189,7 @@ final class MockTypeFactory
     }
 
     /**
-     * @return list<string>
+     * @return list<NamedObjectType>
      */
     private static function extractObjectTargets(Type $type): array
     {
@@ -200,10 +206,10 @@ final class MockTypeFactory
             return [];
         }
 
-        $targets = [$atomic->name];
+        $targets = [$atomic];
         foreach ($atomic->intersections ?? [] as $intersection) {
             if ($intersection instanceof NamedObjectType) {
-                $targets[] = $intersection->name;
+                $targets[] = $intersection;
             }
         }
 
@@ -211,16 +217,17 @@ final class MockTypeFactory
     }
 
     /**
-     * @param array<string, string> $classes
+     * @param array<string, string|NamedObjectType> $classes
      */
-    private static function addTargetIfValid(string $candidate, Codebase $codebase, array &$classes): void
+    private static function addTargetIfValid(string|NamedObjectType $candidate, Codebase $codebase, array &$classes): void
     {
-        $lower = strtolower($candidate);
+        $name = $candidate instanceof NamedObjectType ? $candidate->name : $candidate;
+        $lower = strtolower($name);
         if (isset(self::IGNORED_OBJECT_TYPES[$lower]) || isset($classes[$lower])) {
             return;
         }
 
-        if ($codebase->classOrInterfaceExists($candidate) || $codebase->traitExists($candidate)) {
+        if ($codebase->classOrInterfaceExists($name) || $codebase->traitExists($name)) {
             $classes[$lower] = $candidate;
         }
     }
@@ -264,11 +271,11 @@ final class MockTypeFactory
     }
 
     /**
-     * @param non-empty-list<string> $mockedClasses
+     * @param non-empty-list<string|NamedObjectType> $mockedClasses
      */
     private static function createMultiple(array $mockedClasses): Type
     {
-        $key = implode("\0", $mockedClasses);
+        $key = implode("\0", array_map(self::targetCacheKey(...), $mockedClasses));
         if (isset(self::$types[$key])) {
             return self::$types[$key];
         }
@@ -280,19 +287,102 @@ final class MockTypeFactory
         $primary = array_shift($mockedClasses);
         $intersections = [];
         foreach ($mockedClasses as $extra) {
-            $intersections[] = new NamedObjectType($extra, null, null, false, false, null, false);
+            $intersections[] = self::namedObjectForTarget($extra);
         }
         $intersections[] = new NamedObjectType(self::MOCK_INTERFACE, null, null, false, false, null, false);
 
-        return self::$types[$key] = Type::fromAtomic(new NamedObjectType(
-            name: $primary,
-            parameters: null,
-            variances: null,
+        $primaryObject = self::namedObjectForTarget($primary, $intersections);
+
+        return self::$types[$key] = Type::fromAtomic($primaryObject);
+    }
+
+    private static function targetCacheKey(string|NamedObjectType $target): string
+    {
+        if (is_string($target)) {
+            return $target;
+        }
+
+        return self::atomicCacheKey($target);
+    }
+
+    private static function typeCacheKey(Type $type): string
+    {
+        $parts = [];
+        foreach ($type->atomicTypes as $atomic) {
+            $parts[] = self::atomicCacheKey($atomic);
+        }
+
+        return implode('|', $parts);
+    }
+
+    private static function atomicCacheKey(object $atomic): string
+    {
+        if ($atomic instanceof NamedObjectType) {
+            $key = $atomic->name;
+            if ($atomic->parameters !== null && $atomic->parameters !== []) {
+                $key .= '<' . implode(',', array_map(self::typeCacheKey(...), $atomic->parameters)) . '>';
+            }
+            if ($atomic->intersections !== null && $atomic->intersections !== []) {
+                $key .= '&' . implode('&', array_map(self::atomicCacheKey(...), $atomic->intersections));
+            }
+
+            return $key;
+        }
+
+        if ($atomic instanceof ScalarType) {
+            $key = 'scalar:' . $atomic->kind->value;
+            if ($atomic->refinement instanceof ClassLikeStringType) {
+                $key .= ':' . $atomic->refinement->variant->name;
+                if ($atomic->refinement->constraint instanceof AtomicType) {
+                    $key .= ':' . self::atomicCacheKey($atomic->refinement->constraint);
+                }
+            } elseif (is_bool($atomic->refinement)) {
+                $key .= ':' . ($atomic->refinement ? 'true' : 'false');
+            }
+
+            return $key;
+        }
+
+        if ($atomic instanceof KeyedArrayType) {
+            $key = $atomic->nonEmpty ? 'nonempty-array' : 'array';
+            if ($atomic->keyType !== null && $atomic->valueType !== null) {
+                $key .= '<' . self::typeCacheKey($atomic->keyType) . ',' . self::typeCacheKey($atomic->valueType) . '>';
+            }
+
+            return $key;
+        }
+
+        if ($atomic instanceof ListType) {
+            $prefix = $atomic->nonEmpty ? 'nonempty-list' : 'list';
+
+            return $prefix . '<' . self::typeCacheKey($atomic->elementType) . '>';
+        }
+
+        if ($atomic instanceof SimpleAtomicType) {
+            return 'simple:' . $atomic->kind->value;
+        }
+
+        return $atomic::class;
+    }
+
+    /**
+     * @param list<NamedObjectType>|null $intersections
+     */
+    private static function namedObjectForTarget(string|NamedObjectType $target, ?array $intersections = null): NamedObjectType
+    {
+        if (is_string($target)) {
+            return new NamedObjectType($target, null, null, false, false, $intersections, false);
+        }
+
+        return new NamedObjectType(
+            name: $target->name,
+            parameters: $target->parameters,
+            variances: $target->variances,
             static: false,
             isThis: false,
             intersections: $intersections,
-            remappedParameters: false,
-        ));
+            remappedParameters: $target->remappedParameters,
+        );
     }
 
     /**

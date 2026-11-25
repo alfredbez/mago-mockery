@@ -6,6 +6,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.3] - 2026-11-25
+
+### Fixed
+
+- Trait constant access filtering separates `static` local variables from reference-escaped cells so pure built-in literal calls preserve current static-local mock provenance, while calls that may re-enter, first-call-only static initializers, magic methods, destructors, and reference escapes still invalidate stale state.
+- Trait constant access filtering models guaranteed first iterations for `do ... while` loops with statically falsy conditions without dropping later-iteration or post-reassignment diagnostics, and retains mock provenance through `shouldDeferMissing()` (also mirrored in strict allowance resolution), `clone` expressions (including PHP 8.5 named-argument `clone(...)`), and null-coalescing `??=` / `??` refinement from known-null and mock-or-null states.
+
 ## [0.1.2] - 2026-11-25
 
 ### Fixed

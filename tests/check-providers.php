@@ -22,11 +22,15 @@ use Mago\Sdk\Analyzer\Metadata\ParameterMetadata;
 use Mago\Sdk\Analyzer\Metadata\TypeMetadata;
 use Mago\Sdk\Analyzer\ReturnTypeProviderContext;
 use Mago\Sdk\Analyzer\Type;
+use Mago\Sdk\Analyzer\Type\ArrayItem;
+use Mago\Sdk\Analyzer\Type\ArrayKey;
+use Mago\Sdk\Analyzer\Type\ArrayKeyKind;
 use Mago\Sdk\Analyzer\Type\ClassLikeStringKind;
 use Mago\Sdk\Analyzer\Type\ClassLikeStringType;
 use Mago\Sdk\Analyzer\Type\ClassLikeStringVariant;
 use Mago\Sdk\Analyzer\Type\FunctionLikeIdentifier;
 use Mago\Sdk\Analyzer\Type\FunctionLikeKind;
+use Mago\Sdk\Analyzer\Type\KeyedArrayType;
 use Mago\Sdk\Analyzer\Type\NamedObjectType;
 use Mago\Sdk\Analyzer\Type\ScalarType;
 use Mago\Sdk\Analyzer\Type\ScalarTypeKind;
@@ -233,6 +237,42 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
         && isset($genericPrimary->parameters[0])
         && (string) $genericPrimary->parameters[0] === 'string',
         'class-string<Alpha<string>> must keep the generic parameter on Alpha&MockInterface.',
+    );
+
+    $idShape = Type::fromAtomic(new KeyedArrayType(
+        knownItems: [new ArrayItem(new ArrayKey(ArrayKeyKind::String, 'id'), false, Type::int())],
+        keyType: null,
+        valueType: null,
+        nonEmpty: true,
+    ));
+    $nameShape = Type::fromAtomic(new KeyedArrayType(
+        knownItems: [new ArrayItem(new ArrayKey(ArrayKeyKind::String, 'name'), false, Type::string())],
+        keyType: null,
+        valueType: null,
+        nonEmpty: true,
+    ));
+    $idBoxMock = MockTypeFactory::fromInvocation(
+        new Invocation(InvocationKind::StaticMethod, 'mock', 'Mockery', Type::namedObject('Mockery'), $span, [
+            new Argument(null, false, false, $span, '$box', Type::fromAtomic(new NamedObjectType('Alpha', [$idShape], null, false, false, null, false))),
+        ]),
+        $codebase,
+    );
+    $nameBoxMock = MockTypeFactory::fromInvocation(
+        new Invocation(InvocationKind::StaticMethod, 'mock', 'Mockery', Type::namedObject('Mockery'), $span, [
+            new Argument(null, false, false, $span, '$box', Type::fromAtomic(new NamedObjectType('Alpha', [$nameShape], null, false, false, null, false))),
+        ]),
+        $codebase,
+    );
+    $idBoxPrimary = $idBoxMock?->atomicTypes[0] ?? null;
+    $nameBoxPrimary = $nameBoxMock?->atomicTypes[0] ?? null;
+    $check(
+        $idBoxPrimary instanceof NamedObjectType
+        && $nameBoxPrimary instanceof NamedObjectType
+        && $idBoxPrimary->parameters !== null
+        && $nameBoxPrimary->parameters !== null
+        && serialize($idBoxPrimary->parameters[0]) === serialize($idShape)
+        && serialize($nameBoxPrimary->parameters[0]) === serialize($nameShape),
+        'Distinct generic array-shape mocks must not collide in MockTypeFactory cache.',
     );
 
     $cache->values[Protocol::GET_CLASS_LIKES << 4]['alpha'] = new ClassLikeMetadata(

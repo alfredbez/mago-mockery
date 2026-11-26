@@ -9,15 +9,11 @@ use Mago\Sdk\Analyzer\Invocation;
 use Mago\Sdk\Analyzer\Metadata\ClassLikeMetadata;
 use Mago\Sdk\Analyzer\Metadata\MemberIdentifier;
 use Mago\Sdk\Analyzer\Type;
-use Mago\Sdk\Analyzer\Type\AtomicType;
 use Mago\Sdk\Analyzer\Type\ClassLikeStringType;
 use Mago\Sdk\Analyzer\Type\ClassLikeStringVariant;
-use Mago\Sdk\Analyzer\Type\KeyedArrayType;
-use Mago\Sdk\Analyzer\Type\ListType;
 use Mago\Sdk\Analyzer\Type\NamedObjectType;
 use Mago\Sdk\Analyzer\Type\ScalarType;
 use Mago\Sdk\Analyzer\Type\ScalarTypeKind;
-use Mago\Sdk\Analyzer\Type\SimpleAtomicType;
 
 /**
  * Builds `Foo&MockInterface` for a mocked class name.
@@ -275,13 +271,9 @@ final class MockTypeFactory
      */
     private static function createMultiple(array $mockedClasses): Type
     {
-        $key = implode("\0", array_map(self::targetCacheKey(...), $mockedClasses));
-        if (isset(self::$types[$key])) {
-            return self::$types[$key];
-        }
-
-        if (count(self::$types) >= self::MAX_CACHED_TYPES) {
-            self::$types = [];
+        $cacheKey = self::plainClassCacheKey($mockedClasses);
+        if ($cacheKey !== null && isset(self::$types[$cacheKey])) {
+            return self::$types[$cacheKey];
         }
 
         $primary = array_shift($mockedClasses);
@@ -291,78 +283,31 @@ final class MockTypeFactory
         }
         $intersections[] = new NamedObjectType(self::MOCK_INTERFACE, null, null, false, false, null, false);
 
-        $primaryObject = self::namedObjectForTarget($primary, $intersections);
-
-        return self::$types[$key] = Type::fromAtomic($primaryObject);
-    }
-
-    private static function targetCacheKey(string|NamedObjectType $target): string
-    {
-        if (is_string($target)) {
-            return $target;
+        $type = Type::fromAtomic(self::namedObjectForTarget($primary, $intersections));
+        if ($cacheKey !== null) {
+            if (count(self::$types) >= self::MAX_CACHED_TYPES) {
+                self::$types = [];
+            }
+            self::$types[$cacheKey] = $type;
         }
 
-        return self::atomicCacheKey($target);
+        return $type;
     }
 
-    private static function typeCacheKey(Type $type): string
+    /**
+     * @param non-empty-list<string|NamedObjectType> $mockedClasses
+     */
+    private static function plainClassCacheKey(array $mockedClasses): ?string
     {
         $parts = [];
-        foreach ($type->atomicTypes as $atomic) {
-            $parts[] = self::atomicCacheKey($atomic);
-        }
-
-        return implode('|', $parts);
-    }
-
-    private static function atomicCacheKey(object $atomic): string
-    {
-        if ($atomic instanceof NamedObjectType) {
-            $key = $atomic->name;
-            if ($atomic->parameters !== null && $atomic->parameters !== []) {
-                $key .= '<' . implode(',', array_map(self::typeCacheKey(...), $atomic->parameters)) . '>';
+        foreach ($mockedClasses as $target) {
+            if (!is_string($target)) {
+                return null;
             }
-            if ($atomic->intersections !== null && $atomic->intersections !== []) {
-                $key .= '&' . implode('&', array_map(self::atomicCacheKey(...), $atomic->intersections));
-            }
-
-            return $key;
+            $parts[] = $target;
         }
 
-        if ($atomic instanceof ScalarType) {
-            $key = 'scalar:' . $atomic->kind->value;
-            if ($atomic->refinement instanceof ClassLikeStringType) {
-                $key .= ':' . $atomic->refinement->variant->name;
-                if ($atomic->refinement->constraint instanceof AtomicType) {
-                    $key .= ':' . self::atomicCacheKey($atomic->refinement->constraint);
-                }
-            } elseif (is_bool($atomic->refinement)) {
-                $key .= ':' . ($atomic->refinement ? 'true' : 'false');
-            }
-
-            return $key;
-        }
-
-        if ($atomic instanceof KeyedArrayType) {
-            $key = $atomic->nonEmpty ? 'nonempty-array' : 'array';
-            if ($atomic->keyType !== null && $atomic->valueType !== null) {
-                $key .= '<' . self::typeCacheKey($atomic->keyType) . ',' . self::typeCacheKey($atomic->valueType) . '>';
-            }
-
-            return $key;
-        }
-
-        if ($atomic instanceof ListType) {
-            $prefix = $atomic->nonEmpty ? 'nonempty-list' : 'list';
-
-            return $prefix . '<' . self::typeCacheKey($atomic->elementType) . '>';
-        }
-
-        if ($atomic instanceof SimpleAtomicType) {
-            return 'simple:' . $atomic->kind->value;
-        }
-
-        return $atomic::class;
+        return implode("\0", $parts);
     }
 
     /**

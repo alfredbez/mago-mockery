@@ -69,7 +69,7 @@ $expected = [
             'non-existent-method' => 6,
         ],
         'tests/fixtures/Wave12ContractsNegative.php' => [
-            'non-existent-method' => 4,
+            'non-existent-method' => 6,
         ],
         'tests/fixtures/Negative.php' => [
             // direct trait constant access on non-mock $traitClass = LoggableTrait::class
@@ -148,19 +148,20 @@ $expected = [
         ],
         'tests/fixtures/Wave12Contracts.php' => [
             'invalid-property-assignment-value' => 1,
+            'mixed-argument' => 2,
             'mixed-assignment' => 4,
             'mixed-method-access' => 2,
             'mixed-operand' => 3,
             'non-documented-method' => 7,
-            'non-existent-method' => 13,
+            'non-existent-method' => 16,
             'null-argument' => 1,
-            'possibly-invalid-argument' => 3,
+            'possibly-invalid-argument' => 4,
             'redundant-condition' => 1,
             'too-many-arguments' => 1,
             'unreachable-else-clause' => 1,
         ],
         'tests/fixtures/Wave12ContractsNegative.php' => [
-            'non-existent-method' => 4,
+            'non-existent-method' => 7,
         ],
         'tests/fixtures/Wave9FactoriesAndTraits.php' => [
             'impossible-assignment' => 5,
@@ -501,7 +502,7 @@ $failures += assertHistograms('strict enabled mode', $strictEnabled, [
         'alfredbez/mockery/unknown-mocked-method' => 7,
     ],
     'tests/strict-fixtures/Wave12Strict.php' => [
-        'alfredbez/mockery/unknown-mocked-method' => 1,
+        'alfredbez/mockery/unknown-mocked-method' => 4,
     ],
 ]);
 foreach ([
@@ -522,14 +523,16 @@ foreach ([
         1,
     );
 }
-$failures += assertMessageCount(
-    'strict enabled mode',
-    $strictEnabled,
-    'tests/strict-fixtures/Wave12Strict.php',
-    'alfredbez/mockery/unknown-mocked-method',
-    'Method `missing` does not exist on mocked type `MockeryFixture\\Strict\\StrictGreeter`',
-    1,
-);
+foreach (['missing', 'dynAfterReassign', 'dynConditional', 'dynAfterUnset'] as $missingMethod) {
+    $failures += assertMessageCount(
+        'strict enabled mode',
+        $strictEnabled,
+        'tests/strict-fixtures/Wave12Strict.php',
+        'alfredbez/mockery/unknown-mocked-method',
+        "Method `{$missingMethod}` does not exist on mocked type `MockeryFixture\\Strict\\StrictGreeter`",
+        1,
+    );
+}
 $failures += assertMessageCount(
     'strict enabled mode',
     $strictEnabled,

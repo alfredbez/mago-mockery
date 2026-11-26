@@ -49,4 +49,20 @@ final class Wave12ContractsNegative extends Support
         $box = new GenericBox('hello');
         $box->asUndefined();
     }
+
+    public function sameMethodLaterAliasMustNotResolve(): void
+    {
+        $fetched = Mockery::fetchMock('DefinedLaterAlias');
+        if ($fetched !== null) {
+            $fetched->greet('must-stay-unresolved-before-declaration');
+        }
+
+        Mockery::namedMock('DefinedLaterAlias', Greeter::class);
+    }
+
+    /** @param GenericBox<string>|(Greeter&\Mockery\MockInterface) $maybeMock */
+    public function unionWithPlainObjectAsUndefinedMustReport(GenericBox|Greeter $maybeMock): void
+    {
+        $maybeMock->asUndefined();
+    }
 }

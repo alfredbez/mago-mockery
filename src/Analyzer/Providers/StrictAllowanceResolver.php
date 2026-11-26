@@ -134,7 +134,7 @@ final class StrictAllowanceResolver
 
     /**
      * @param list<Node> $statements
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool} $state
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
      * @return bool True when traversal reached the target call offset and must stop.
      */
     private static function walkStatements(
@@ -165,7 +165,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool} $state
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
      */
     private static function walkContainingStatement(
         SourceFile $source,
@@ -189,7 +189,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool} $state
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
      */
     private static function processStatement(
         SourceFile $source,
@@ -246,6 +246,13 @@ final class StrictAllowanceResolver
                 return;
 
             case NodeKind::Unset:
+                foreach ($source->getChildren($statement) as $child) {
+                    $key = self::identityKey($source, $child);
+                    if ($key !== null) {
+                        self::detachRef($state, $key);
+                        $state['vars'][$key] = self::freshId($nextId);
+                    }
+                }
                 foreach ($source->getDescendants($statement, NodeKind::DirectVariable) as $var) {
                     if (!self::isInsideNestedScope($source, $statement, $var)) {
                         $varName = $source->getText($var);
@@ -274,7 +281,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool} $state
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
      */
     private static function processIf(SourceFile $source, Node $ifNode, array &$state, int &$nextId): void
     {
@@ -311,7 +318,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool} $state
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
      */
     private static function walkContainingIf(
         SourceFile $source,
@@ -352,7 +359,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool} $state
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
      */
     private static function walkContainingLoop(
         SourceFile $source,
@@ -374,7 +381,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool} $state
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
      */
     private static function processTry(SourceFile $source, Node $tryNode, array &$state, int &$nextId): void
     {
@@ -416,7 +423,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool} $state
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
      */
     private static function walkContainingTry(
         SourceFile $source,
@@ -461,7 +468,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool} $state
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
      */
     private static function walkContainingSwitch(
         SourceFile $source,
@@ -495,7 +502,7 @@ final class StrictAllowanceResolver
 
     /**
      * @param list<Node> $statements
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool} $state
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
      */
     private static function processStatementList(SourceFile $source, array $statements, array &$state, int &$nextId): void
     {
@@ -508,7 +515,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool} $state
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
      */
     private static function walkExpressionUntil(
         SourceFile $source,
@@ -543,7 +550,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool} $state
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
      */
     private static function processExpression(
         SourceFile $source,
@@ -598,7 +605,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool} $state
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
      */
     private static function processAssignment(
         SourceFile $source,
@@ -725,7 +732,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool} $state
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
      */
     private static function processMethodCallExpression(
         SourceFile $source,
@@ -761,7 +768,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool} $state
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
      */
     private static function killWrittenVariables(
         SourceFile $source,
@@ -804,6 +811,12 @@ final class StrictAllowanceResolver
             if (self::isInsideNestedScope($source, $subtree, $unsetNode)) {
                 continue;
             }
+            foreach ($source->getChildren($unsetNode) as $child) {
+                $key = self::identityKey($source, $child);
+                if ($key !== null) {
+                    self::killVar($state, $key, $nextId);
+                }
+            }
             foreach ($source->getDescendants($unsetNode, NodeKind::DirectVariable) as $var) {
                 if (!self::isInsideNestedScope($source, $subtree, $var)) {
                     self::killVar($state, $source->getText($var), $nextId);
@@ -831,7 +844,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool} $state
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
      */
     private static function killCatchVariable(SourceFile $source, Node $catchNode, array &$state, int &$nextId): void
     {
@@ -844,8 +857,8 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param list<array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool}> $branches
-     * @return array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool}
+     * @param list<array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool}> $branches
+     * @return array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool}
      */
     private static function joinStates(array $branches, int &$nextId): array
     {
@@ -1265,7 +1278,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool} $state
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
      */
     private static function varId(array $state, string $varName): string
     {
@@ -1273,7 +1286,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, terminated: bool} $state
+     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
      */
     private static function killVar(array &$state, string $varName, int &$nextId): void
     {
@@ -1330,7 +1343,7 @@ final class StrictAllowanceResolver
 
         foreach (array_keys($state['refs'][$varName]) as $peer) {
             unset($state['refs'][$peer][$varName]);
-            if (($state['refs'][$peer] ?? []) === []) {
+            if ($state['refs'][$peer] === []) {
                 unset($state['refs'][$peer]);
             }
         }

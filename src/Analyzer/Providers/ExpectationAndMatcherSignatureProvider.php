@@ -206,19 +206,25 @@ final class ExpectationAndMatcherSignatureProvider implements MethodReturnTypePr
 
         foreach ($receiverType->atomicTypes as $atomic) {
             if (self::namedObjectIsMockeryMock($atomic)) {
-                return true;
+                continue;
             }
 
+            $hasMockIntersection = false;
             if ($atomic instanceof NamedObjectType) {
                 foreach ($atomic->intersections ?? [] as $intersection) {
                     if (self::namedObjectIsMockeryMock($intersection)) {
-                        return true;
+                        $hasMockIntersection = true;
+                        break;
                     }
                 }
             }
+
+            if (!$hasMockIntersection) {
+                return false;
+            }
         }
 
-        return false;
+        return true;
     }
 
     private static function namedObjectIsMockeryMock(object $atomic): bool

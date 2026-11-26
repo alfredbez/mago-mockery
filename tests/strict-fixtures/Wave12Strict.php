@@ -35,4 +35,31 @@ final class Wave12StrictFixture
         $mock = Mockery::mock(StrictGreeter::class);
         $mock->shouldReceive()->missing()->andReturn('x');
     }
+
+    public function propertyAllowanceInvalidatedOnReassignment(): void
+    {
+        $this->prop = Mockery::mock(StrictGreeter::class);
+        $this->prop->shouldAllowMockingMethod('dynAfterReassign');
+        $this->prop = Mockery::mock(StrictGreeter::class);
+        $this->prop->shouldReceive('dynAfterReassign')->andReturn('x');
+    }
+
+    public function propertyAllowanceNotDominatedInBranch(bool $flag): void
+    {
+        $this->prop = Mockery::mock(StrictGreeter::class);
+        if ($flag) {
+            $this->prop->shouldAllowMockingMethod('dynConditional');
+        }
+        $this->prop->shouldReceive('dynConditional')->andReturn('x');
+    }
+
+    public function propertyAllowanceInvalidatedOnUnset(bool $flag): void
+    {
+        $this->prop = Mockery::mock(StrictGreeter::class);
+        $this->prop->shouldAllowMockingMethod('dynAfterUnset');
+        if ($flag) {
+            unset($this->prop);
+        }
+        $this->prop->shouldReceive('dynAfterUnset')->andReturn('x');
+    }
 }

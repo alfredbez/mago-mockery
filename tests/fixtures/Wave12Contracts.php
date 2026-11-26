@@ -36,6 +36,11 @@ final class Wave12Contracts extends Support
         $fromIntClassStringValue = $fromIntClassString->get();
         $fromIntClassStringValue + 1;
 
+        $idBox = Mockery::mock(new GenericBox(['id' => 1]));
+        $nameBox = Mockery::mock(new GenericBox(['name' => 'alice']));
+        $this->takesId($idBox->get());
+        $this->takesName($nameBox->get());
+
         $mock = Mockery::mock(Greeter::class);
         $mock->shouldIgnoreMissing(null, true);
         $undefined = $mock->asUndefined();
@@ -62,6 +67,33 @@ final class Wave12Contracts extends Support
         $namedFetch = Mockery::fetchMock(name: $aliasName);
         if ($namedFetch !== null) {
             $namedFetch->shouldReceive('anything');
+        }
+
+        $container = Mockery::getContainer();
+        $containerFetched = $container->fetchMock($aliasName);
+        if ($containerFetched !== null) {
+            $containerFetched->shouldReceive('anything');
+        }
+    }
+
+    /** @param array{id: int} $row */
+    private function takesId(array $row): int
+    {
+        return $row['id'];
+    }
+
+    /** @param array{name: string} $row */
+    private function takesName(array $row): string
+    {
+        return $row['name'];
+    }
+
+    public function sameMethodEarlierAlias(): void
+    {
+        Mockery::namedMock('SameMethodEarlierAlias', Greeter::class);
+        $fetched = Mockery::fetchMock('SameMethodEarlierAlias');
+        if ($fetched !== null) {
+            $fetched->greet('same-method');
         }
     }
 

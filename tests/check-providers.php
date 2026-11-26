@@ -276,6 +276,33 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
         'Distinct generic array-shape mocks must not collide in MockTypeFactory cache.',
     );
 
+    $stringAlphaMock = MockTypeFactory::fromInvocation(
+        new Invocation(InvocationKind::StaticMethod, 'mock', 'Mockery', Type::namedObject('Mockery'), $span, [
+            new Argument(null, false, false, $span, 'Alpha::class', Type::literalString('Alpha')),
+        ]),
+        $codebase,
+    );
+    $partialAlphaMock = MockTypeFactory::fromInvocation(
+        new Invocation(InvocationKind::StaticMethod, 'mock', 'Mockery', Type::namedObject('Mockery'), $span, [
+            new Argument(null, false, false, $span, '$alpha', Type::namedObject('Alpha')),
+        ]),
+        $codebase,
+    );
+    $remappedAlphaMock = MockTypeFactory::fromInvocation(
+        new Invocation(InvocationKind::StaticMethod, 'mock', 'Mockery', Type::namedObject('Mockery'), $span, [
+            new Argument(null, false, false, $span, '$alpha', Type::fromAtomic(new NamedObjectType('Alpha', null, null, false, false, null, true))),
+        ]),
+        $codebase,
+    );
+    $remappedPrimary = $remappedAlphaMock?->atomicTypes[0] ?? null;
+    $check(
+        $stringAlphaMock !== null
+        && $partialAlphaMock === $stringAlphaMock
+        && $remappedPrimary instanceof NamedObjectType
+        && $remappedPrimary->remappedParameters === true,
+        'Plain object partial mocks must reuse the plain class cache without colliding with remapped generic targets.',
+    );
+
     $cache->values[Protocol::GET_CLASS_LIKES << 4]['alpha'] = new ClassLikeMetadata(
         name: 'Alpha',
         originalName: 'Alpha',

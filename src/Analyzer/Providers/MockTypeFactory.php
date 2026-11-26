@@ -305,12 +305,35 @@ final class MockTypeFactory
      */
     private static function plainClassCacheKey(array $mockedClasses): ?string
     {
+        if (count($mockedClasses) === 1) {
+            $target = $mockedClasses[0];
+            if (is_string($target)) {
+                return $target;
+            }
+
+            return ($target->parameters === null || $target->parameters === [])
+                && ($target->variances === null || $target->variances === [])
+                && !$target->remappedParameters
+                ? $target->name
+                : null;
+        }
+
         $parts = [];
         foreach ($mockedClasses as $target) {
-            if (!is_string($target)) {
-                return null;
+            if (is_string($target)) {
+                $parts[] = $target;
+                continue;
             }
-            $parts[] = $target;
+            if (
+                ($target->parameters === null || $target->parameters === [])
+                && ($target->variances === null || $target->variances === [])
+                && !$target->remappedParameters
+            ) {
+                $parts[] = $target->name;
+                continue;
+            }
+
+            return null;
         }
 
         return implode("\0", $parts);
@@ -327,8 +350,8 @@ final class MockTypeFactory
 
         return new NamedObjectType(
             name: $target->name,
-            parameters: $target->parameters,
-            variances: $target->variances,
+            parameters: $target->parameters === [] ? null : $target->parameters,
+            variances: $target->variances === [] ? null : $target->variances,
             static: false,
             isThis: false,
             intersections: $intersections,

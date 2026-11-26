@@ -65,4 +65,10 @@ final class Wave12ContractsNegative extends Support
     {
         $maybeMock->asUndefined();
     }
+
+    public function setMissingRequiredValueMustReport(): void
+    {
+        $mock = Mockery::mock(Greeter::class);
+        $mock->shouldReceive('greet')->set('label');
+    }
 }

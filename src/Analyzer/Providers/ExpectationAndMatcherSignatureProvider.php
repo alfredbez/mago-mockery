@@ -58,12 +58,21 @@ final class ExpectationAndMatcherSignatureProvider implements MethodReturnTypePr
 
         if ($class === 'mockery\\expectation') {
             return match ($method) {
-                'andset', 'set' => new EffectiveCallableSignature(
+                'andset' => new EffectiveCallableSignature(
                     parameters: [
                         new CallableParameter(name: '$name', type: Type::string()),
                         new CallableParameter(name: '$values', type: Type::mixed(), variadic: true),
                     ],
                     allowsNamedArguments: true,
+                    displayName: 'Mockery\\Expectation::' . $context->invocation->name,
+                ),
+                'set' => new EffectiveCallableSignature(
+                    parameters: [
+                        new CallableParameter(name: '$name', type: Type::string()),
+                        new CallableParameter(name: '$value', type: Type::mixed()),
+                        new CallableParameter(name: '$values', type: Type::mixed(), variadic: true),
+                    ],
+                    allowsNamedArguments: false,
                     displayName: 'Mockery\\Expectation::' . $context->invocation->name,
                 ),
                 'andreturnarg' => new EffectiveCallableSignature(

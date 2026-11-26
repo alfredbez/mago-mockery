@@ -186,7 +186,8 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
     ]);
     $setSignature = $signature($codebase, 'set');
     $check((string) $setSignature->parameters[0]->type === 'string', 'set must retain the property name type.');
-    $check((string) $setSignature->parameters[1]->type === 'mixed' && $setSignature->parameters[1]->variadic, 'set must accept mixed variadic values like andSet.');
+    $check((string) $setSignature->parameters[1]->type === 'mixed' && !$setSignature->parameters[1]->variadic && !$setSignature->parameters[1]->hasDefault, 'set must require its second argument.');
+    $check((string) $setSignature->parameters[2]->type === 'mixed' && $setSignature->parameters[2]->variadic && !$setSignature->allowsNamedArguments, 'set must accept additional positional mixed values without arbitrary named arguments.');
 
     $typedClassString = Type::fromAtomic(new ScalarType(
         ScalarTypeKind::ClassLikeString,

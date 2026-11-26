@@ -108,9 +108,10 @@ final class CompositeExpectationProvider implements MethodReturnTypeProvider, Ca
             return new EffectiveCallableSignature(
                 parameters: [
                     new CallableParameter(name: '$name', type: Type::string()),
+                    new CallableParameter(name: '$value', type: Type::mixed()),
                     new CallableParameter(name: '$values', type: Type::mixed(), variadic: true),
                 ],
-                allowsNamedArguments: true,
+                allowsNamedArguments: false,
                 displayName: self::COMPOSITE . '::' . $methodName,
             );
         }

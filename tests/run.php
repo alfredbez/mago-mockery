@@ -70,6 +70,7 @@ $expected = [
         ],
         'tests/fixtures/Wave12ContractsNegative.php' => [
             'non-existent-method' => 6,
+            'too-few-arguments' => 1,
         ],
         'tests/fixtures/Negative.php' => [
             // direct trait constant access on non-mock $traitClass = LoggableTrait::class
@@ -153,7 +154,7 @@ $expected = [
             'mixed-method-access' => 2,
             'mixed-operand' => 3,
             'non-documented-method' => 7,
-            'non-existent-method' => 16,
+            'non-existent-method' => 19,
             'null-argument' => 1,
             'possibly-invalid-argument' => 4,
             'redundant-condition' => 1,
@@ -162,6 +163,7 @@ $expected = [
         ],
         'tests/fixtures/Wave12ContractsNegative.php' => [
             'non-existent-method' => 7,
+            'too-few-arguments' => 1,
         ],
         'tests/fixtures/Wave9FactoriesAndTraits.php' => [
             'impossible-assignment' => 5,
@@ -502,7 +504,7 @@ $failures += assertHistograms('strict enabled mode', $strictEnabled, [
         'alfredbez/mockery/unknown-mocked-method' => 7,
     ],
     'tests/strict-fixtures/Wave12Strict.php' => [
-        'alfredbez/mockery/unknown-mocked-method' => 4,
+        'alfredbez/mockery/unknown-mocked-method' => 5,
     ],
 ]);
 foreach ([
@@ -523,7 +525,7 @@ foreach ([
         1,
     );
 }
-foreach (['missing', 'dynAfterReassign', 'dynConditional', 'dynAfterUnset'] as $missingMethod) {
+foreach (['missing', 'dynAfterReassign', 'dynConditional', 'dynAfterUnset', 'dynAfterPropRefReassign'] as $missingMethod) {
     $failures += assertMessageCount(
         'strict enabled mode',
         $strictEnabled,

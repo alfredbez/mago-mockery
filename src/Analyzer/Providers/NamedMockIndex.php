@@ -146,11 +146,7 @@ final class NamedMockIndex implements CodebaseScanHook
 
         $resolved = $targets !== [] ? array_values($targets) : null;
         $callable = self::enclosingCallable($source, $call);
-        if ($callable === null) {
-            return;
-        }
-
-        if (self::isLifecycleCallable($source, $callable)) {
+        if ($callable !== null && self::isLifecycleCallable($source, $callable)) {
             $classKey = self::enclosingClassKey($source, $call);
             if ($classKey !== null) {
                 $aliases['lifecycle'][$classKey] ??= [];
@@ -165,8 +161,8 @@ final class NamedMockIndex implements CodebaseScanHook
             }
         }
 
-        $methodKey = $callable->span->start . ':' . $callable->span->end;
-        $aliases['methods'][$methodKey][$aliasName][] = [
+        $scopeKey = $callable !== null ? $callable->span->start . ':' . $callable->span->end : '__top__';
+        $aliases['methods'][$scopeKey][$aliasName][] = [
             'end' => $call->span->end,
             'targets' => $resolved,
         ];
@@ -384,25 +380,23 @@ final class NamedMockIndex implements CodebaseScanHook
         array $fileAliases,
     ): ?array {
         $callable = self::enclosingCallable($source, $call);
-        if ($callable !== null) {
-            $methodKey = $callable->span->start . ':' . $callable->span->end;
-            $entries = $fileAliases['methods'][$methodKey][$fetchName] ?? [];
-            $matched = false;
-            $resolved = null;
-            foreach ($entries as $entry) {
-                if ($entry['end'] > $call->span->start) {
-                    continue;
-                }
-                if (!$matched) {
-                    $matched = true;
-                    $resolved = $entry['targets'];
-                } elseif ($resolved !== $entry['targets']) {
-                    return null;
-                }
+        $scopeKey = $callable !== null ? $callable->span->start . ':' . $callable->span->end : '__top__';
+        $entries = $fileAliases['methods'][$scopeKey][$fetchName] ?? [];
+        $matched = false;
+        $resolved = null;
+        foreach ($entries as $entry) {
+            if ($entry['end'] > $call->span->start) {
+                continue;
             }
-            if ($matched) {
-                return $resolved;
+            if (!$matched) {
+                $matched = true;
+                $resolved = $entry['targets'];
+            } elseif ($resolved !== $entry['targets']) {
+                return null;
             }
+        }
+        if ($matched) {
+            return $resolved;
         }
 
         $classKey = self::enclosingClassKey($source, $call);

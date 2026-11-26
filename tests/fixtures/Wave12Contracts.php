@@ -41,6 +41,12 @@ final class Wave12Contracts extends Support
         $this->takesId($idBox->get());
         $this->takesName($nameBox->get());
 
+        $lastWinsBox = Mockery::mock(new GenericBox(1), new GenericBox('hello'));
+        $lastWinsBox->get() . 'z';
+
+        $classThenObjectBox = Mockery::mock(GenericBox::class, new GenericBox('hello'));
+        $classThenObjectBox->get() . 'z';
+
         $mock = Mockery::mock(Greeter::class);
         $mock->shouldIgnoreMissing(null, true);
         $undefined = $mock->asUndefined();
@@ -160,4 +166,10 @@ final class Wave12Contracts extends Support
             $fromMockerySetUp->greet('from-mockery-setup');
         }
     }
+}
+
+Mockery::namedMock('TopLevelScriptAlias', Greeter::class);
+$topLevelFetched = Mockery::fetchMock('TopLevelScriptAlias');
+if ($topLevelFetched !== null) {
+    $topLevelFetched->greet('top-level');
 }

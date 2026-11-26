@@ -62,4 +62,13 @@ final class Wave12StrictFixture
         }
         $this->prop->shouldReceive('dynAfterUnset')->andReturn('x');
     }
+
+    public function propertyAllowanceInvalidatedViaReferenceAlias(): void
+    {
+        $this->prop = Mockery::mock(StrictGreeter::class);
+        $this->prop->shouldAllowMockingMethod('dynAfterPropRefReassign');
+        $alias = &$this->prop;
+        $alias = Mockery::mock(StrictGreeter::class);
+        $this->prop->shouldReceive('dynAfterPropRefReassign')->andReturn('x');
+    }
 }

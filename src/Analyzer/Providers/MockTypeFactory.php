@@ -219,7 +219,13 @@ final class MockTypeFactory
     {
         $name = $candidate instanceof NamedObjectType ? $candidate->name : $candidate;
         $lower = strtolower($name);
-        if (isset(self::IGNORED_OBJECT_TYPES[$lower]) || isset($classes[$lower])) {
+        if (isset(self::IGNORED_OBJECT_TYPES[$lower])) {
+            return;
+        }
+        if (isset($classes[$lower])) {
+            if ($candidate instanceof NamedObjectType) {
+                $classes[$lower] = $candidate;
+            }
             return;
         }
 

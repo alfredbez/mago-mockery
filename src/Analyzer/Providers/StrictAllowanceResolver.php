@@ -687,14 +687,18 @@ final class StrictAllowanceResolver
             return null;
         }
 
-        if ($node->kind === NodeKind::DirectVariable) {
-            return $source->getText($node);
+        $direct = self::identityKey($source, $node);
+        if ($direct !== null) {
+            return $direct;
         }
 
         foreach ($source->getChildren($node) as $child) {
             $inner = self::unwrap($source, $child);
-            if ($inner !== null && $inner->kind === NodeKind::DirectVariable) {
-                return $source->getText($inner);
+            if ($inner !== null) {
+                $key = self::identityKey($source, $inner);
+                if ($key !== null) {
+                    return $key;
+                }
             }
         }
 

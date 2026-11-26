@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [1.0.1] - 2026-11-26
+
+### Fixed
+
+- `MockTypeFactory` reuses the plain-class type cache for non-generic `NamedObjectType` targets (object partial mocks and plain `class-string<T>` arguments) and normalizes empty parameter and variance lists to `null`, restoring `factory_partial` performance while keeping generic and remapped targets uncached to prevent collisions.
+
 ## [1.0.0] - 2026-11-26
 
 ### Added

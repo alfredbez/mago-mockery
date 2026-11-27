@@ -38,14 +38,14 @@ Register the bundled worker in `mago.toml`:
 includes = ["vendor/mockery/mockery/library"]
 
 [extension-hosts.mockery]
-command = ["php", "-d", "xdebug.mode=off", "-d", "pcov.enabled=0", "vendor/bin/mago-mockery-worker"]
+command = ["php", "-d", "xdebug.mode=off", "-d", "pcov.enabled=0", "-d", "memory_limit=512M", "vendor/bin/mago-mockery-worker"]
 workers = 1
 # Optional. Default is off. Set to "1" to report unknown mocked method names.
 # environment = { MAGO_MOCKERY_STRICT_METHODS = "1" }
 ```
 
 - `[source] includes` must point at Mockery's library directory. Mago reads Mockery's interfaces and matcher classes from there. Without it, mock return types have no base to intersect with.
-- The `-d` flags keep Xdebug and PCOV out of the worker. Both hooks add startup cost and coverage bookkeeping to a run that only reads code.
+- The `-d` flags keep Xdebug and PCOV out of the worker and give the worker 512M of headroom for multi-thousand-line test files. Small and medium suites also run within PHP's default 128M limit.
 - Pass worker environment variables through `[extension-hosts.mockery] environment`. `MAGO_MOCKERY_STRICT_METHODS=1` turns on the opt-in unknown-method check. Leave the table unset, or omit the key, to keep the default off.
 
 Check the worker and run the analyzer:

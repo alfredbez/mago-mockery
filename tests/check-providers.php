@@ -737,6 +737,14 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
         'Static-local mock must survive Mockery::mock() with pure class-const args.',
     );
     $check(
+        $filterDecision('<?php use Mockery; function f() { static $m; $m = Mockery::mock(T::class); Mockery::mock(Other::class . "[ping]"); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Static-local mock must invalidate on partial Mockery::mock() spec that invokes real constructors.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { static $m; $m = Mockery::mock(T::class); Mockery::spy("Other[ping]"); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Static-local mock must invalidate on partial Mockery::spy() spec that invokes real constructors.',
+    );
+    $check(
         $filterDecision('<?php use Mockery; function f($cb) { static $m; $m = Mockery::mock(T::class); $m->shouldReceive("foo")->andReturnUsing($cb); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
         'Static-local mock must invalidate when expectation setup receives a callback argument.',
     );
@@ -770,8 +778,28 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
         $cancellation,
     ));
     $check(
-        $factorySig !== null && count($factorySig->parameters) === 1 && $factorySig->parameters[0]->variadic && (string) $factorySig->parameters[0]->type === 'mixed',
-        'MockFactoryReturnTypeProvider must override factory signatures with variadic mixed.',
+        $factorySig !== null
+            && count($factorySig->parameters) === 2
+            && !$factorySig->parameters[0]->variadic
+            && !$factorySig->parameters[0]->hasDefault
+            && (string) $factorySig->parameters[0]->type === 'string'
+            && $factorySig->parameters[1]->variadic
+            && (string) $factorySig->parameters[1]->type === 'string|object|array<int|string, mixed>',
+        'MockFactoryReturnTypeProvider must require string $name on namedMock followed by variadic factory args.',
+    );
+    $mockFactorySig = $factoryProvider->getCallableSignature(new CallableSignatureProviderContext(
+        PHPVersion::fromParts(8, 4),
+        $codebase,
+        new Invocation(InvocationKind::StaticMethod, 'mock', 'Mockery', Type::namedObject('Mockery'), $span, []),
+        new TypeComparator($host, 1, $cancellation),
+        $cancellation,
+    ));
+    $check(
+        $mockFactorySig !== null
+            && count($mockFactorySig->parameters) === 1
+            && $mockFactorySig->parameters[0]->variadic
+            && (string) $mockFactorySig->parameters[0]->type === 'string|object|array<int|string, mixed>',
+        'MockFactoryReturnTypeProvider must override Mockery::mock() with variadic string|object|array<int|string, mixed>.',
     );
     $fetchSig = $factoryProvider->getCallableSignature(new CallableSignatureProviderContext(
         PHPVersion::fromParts(8, 4),
@@ -791,8 +819,26 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
         $cancellation,
     ));
     $check(
-        $helperSig !== null && count($helperSig->parameters) === 1 && $helperSig->parameters[0]->variadic && (string) $helperSig->parameters[0]->type === 'mixed',
-        'MockHelperFunctionReturnTypeProvider must override global helper signatures with variadic mixed.',
+        $helperSig !== null
+            && count($helperSig->parameters) === 1
+            && $helperSig->parameters[0]->variadic
+            && (string) $helperSig->parameters[0]->type === 'string|object|array<int|string, mixed>',
+        'MockHelperFunctionReturnTypeProvider must override global mock() with variadic string|object|array<int|string, mixed>.',
+    );
+    $namedHelperSig = $helperProvider->getCallableSignature(new CallableSignatureProviderContext(
+        PHPVersion::fromParts(8, 4),
+        $codebase,
+        new Invocation(InvocationKind::Function, 'namedMock', null, null, $span, []),
+        new TypeComparator($host, 1, $cancellation),
+        $cancellation,
+    ));
+    $check(
+        $namedHelperSig !== null
+            && count($namedHelperSig->parameters) === 2
+            && !$namedHelperSig->parameters[0]->hasDefault
+            && (string) $namedHelperSig->parameters[0]->type === 'string'
+            && $namedHelperSig->parameters[1]->variadic,
+        'MockHelperFunctionReturnTypeProvider must require string $name on global namedMock().',
     );
 
     $fluentProvider = new ExpectationAndMatcherSignatureProvider();

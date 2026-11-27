@@ -17,6 +17,7 @@ use function array_pop;
 use function array_values;
 use function count;
 use function implode;
+use function ksort;
 use function ltrim;
 use function preg_match;
 use function sort;
@@ -26,12 +27,13 @@ use function strpos;
 use function strtolower;
 use function substr;
 use function trim;
+use function usort;
 
 /**
  * Indexes `namedMock()` targets for `fetchMock()` calls by exact call span,
  * supporting enclosing callable scopes (closures/arrow functions), trait lifecycle
- * hooks (`setUp`, `#[Before]`, `startMockery`, `mockeryTestSetUp`), and branch
- * dominance before shadowing lifecycle aliases.
+ * hooks (`setUp`, `#[Before]`, `startMockery`, `mockeryTestSetUp`) with override
+ * and `insteadof` awareness, and branch dominance before shadowing lifecycle aliases.
  *
  * @phpstan-type TargetSet non-empty-list<string>
  * @phpstan-type MethodAliasEntry array{end: int, targets: ?TargetSet, node: Node}
@@ -39,7 +41,9 @@ use function trim;
  *     localSets: list<TargetSet>,
  *     dominated: bool,
  *     unresolved: bool,
- *     usedTraits: list<string>
+ *     usedTraits: list<string>,
+ *     overriddenMethods: list<string>,
+ *     excludedTraitMethods: array<string, list<string>>
  * }
  *
  * @internal
@@ -53,45 +57,45 @@ final class NamedMockIndex implements CodebaseScanHook
     ];
 
     private const CONDITIONAL_ANCESTOR_KINDS = [
-        NodeKind::If->value => true,
-        NodeKind::IfBody->value => true,
-        NodeKind::IfStatementBody->value => true,
-        NodeKind::IfStatementBodyElseClause->value => true,
-        NodeKind::IfStatementBodyElseIfClause->value => true,
-        NodeKind::IfColonDelimitedBody->value => true,
-        NodeKind::IfColonDelimitedBodyElseClause->value => true,
-        NodeKind::IfColonDelimitedBodyElseIfClause->value => true,
-        NodeKind::Switch->value => true,
-        NodeKind::SwitchCase->value => true,
-        NodeKind::SwitchExpressionCase->value => true,
-        NodeKind::SwitchDefaultCase->value => true,
-        NodeKind::While->value => true,
-        NodeKind::DoWhile->value => true,
-        NodeKind::For->value => true,
-        NodeKind::Foreach->value => true,
-        NodeKind::Try->value => true,
-        NodeKind::TryCatchClause->value => true,
-        NodeKind::Conditional->value => true,
-        NodeKind::Match->value => true,
-        NodeKind::MatchArm->value => true,
-        NodeKind::MatchExpressionArm->value => true,
-        NodeKind::MatchDefaultArm->value => true,
-        NodeKind::Closure->value => true,
-        NodeKind::ArrowFunction->value => true,
+        'If' => true,
+        'IfBody' => true,
+        'IfStatementBody' => true,
+        'IfStatementBodyElseClause' => true,
+        'IfStatementBodyElseIfClause' => true,
+        'IfColonDelimitedBody' => true,
+        'IfColonDelimitedBodyElseClause' => true,
+        'IfColonDelimitedBodyElseIfClause' => true,
+        'Switch' => true,
+        'SwitchCase' => true,
+        'SwitchExpressionCase' => true,
+        'SwitchDefaultCase' => true,
+        'While' => true,
+        'DoWhile' => true,
+        'For' => true,
+        'Foreach' => true,
+        'Try' => true,
+        'TryCatchClause' => true,
+        'Conditional' => true,
+        'Match' => true,
+        'MatchArm' => true,
+        'MatchExpressionArm' => true,
+        'MatchDefaultArm' => true,
+        'Closure' => true,
+        'ArrowFunction' => true,
     ];
 
     private const NON_DOMINATING_LCA_KINDS = [
-        NodeKind::If->value => true,
-        NodeKind::IfBody->value => true,
-        NodeKind::IfStatementBody->value => true,
-        NodeKind::IfColonDelimitedBody->value => true,
-        NodeKind::Switch->value => true,
-        NodeKind::SwitchBody->value => true,
-        NodeKind::SwitchBraceDelimitedBody->value => true,
-        NodeKind::SwitchColonDelimitedBody->value => true,
-        NodeKind::Match->value => true,
-        NodeKind::Try->value => true,
-        NodeKind::Conditional->value => true,
+        'If' => true,
+        'IfBody' => true,
+        'IfStatementBody' => true,
+        'IfColonDelimitedBody' => true,
+        'Switch' => true,
+        'SwitchBody' => true,
+        'SwitchBraceDelimitedBody' => true,
+        'SwitchColonDelimitedBody' => true,
+        'Match' => true,
+        'Try' => true,
+        'Conditional' => true,
     ];
 
     private const SHORT_CIRCUIT_OPERATORS = [
@@ -108,11 +112,17 @@ final class NamedMockIndex implements CodebaseScanHook
     /** @var array<string, true> */
     private array $ambiguousKeys = [];
 
-    /** @var array<string, array<string, ?TargetSet>> */
+    /** @var array<string, array<string, array<string, ?TargetSet>>> traitLower => methodLower => aliasName => targets */
     private array $traitLifecycle = [];
 
     /** @var array<string, list<string>> */
     private array $traitParents = [];
+
+    /** @var array<string, array<string, true>> */
+    private array $traitDeclaredMethods = [];
+
+    /** @var array<string, array<string, array<string, true>>> traitLower => excludedTraitLower => methodLower => true */
+    private array $traitExcludedMethods = [];
 
     public function getTargets(): array
     {
@@ -126,6 +136,8 @@ final class NamedMockIndex implements CodebaseScanHook
             $this->ambiguousKeys = [];
             $this->traitLifecycle = [];
             $this->traitParents = [];
+            $this->traitDeclaredMethods = [];
+            $this->traitExcludedMethods = [];
         }
 
         foreach ($context->files as $source) {
@@ -138,7 +150,12 @@ final class NamedMockIndex implements CodebaseScanHook
             }
 
             if ($hasTrait) {
-                self::recordTraitUses($source, $this->traitParents);
+                self::recordTraitStructure(
+                    $source,
+                    $this->traitParents,
+                    $this->traitDeclaredMethods,
+                    $this->traitExcludedMethods,
+                );
             }
 
             $fileAliases = $hasNamed
@@ -181,7 +198,18 @@ final class NamedMockIndex implements CodebaseScanHook
 
         $sets = $record['localSets'];
         if (!$record['dominated'] && $record['usedTraits'] !== []) {
-            $traitSets = $this->collectTraitLifecycleTargets($record['usedTraits'], $name);
+            $overridden = [];
+            foreach ($record['overriddenMethods'] as $methodLower) {
+                $overridden[$methodLower] = true;
+            }
+            $excluded = [];
+            foreach ($record['excludedTraitMethods'] as $traitLower => $methods) {
+                foreach ($methods as $methodLower) {
+                    $excluded[$traitLower][$methodLower] = true;
+                }
+            }
+
+            $traitSets = $this->collectTraitLifecycleTargets($record['usedTraits'], $name, $overridden, $excluded);
             if ($traitSets === null) {
                 return null;
             }
@@ -197,31 +225,58 @@ final class NamedMockIndex implements CodebaseScanHook
 
     /**
      * @param list<string> $initialTraits
+     * @param array<string, true> $overriddenMethods
+     * @param array<string, array<string, true>> $excludedTraitMethods
      * @return ?list<TargetSet> Null indicates an ambiguous/unresolvable trait lifecycle registration.
      */
-    private function collectTraitLifecycleTargets(array $initialTraits, string $aliasName): ?array
-    {
+    private function collectTraitLifecycleTargets(
+        array $initialTraits,
+        string $aliasName,
+        array $overriddenMethods,
+        array $excludedTraitMethods,
+    ): ?array {
         $sets = [];
         $visited = [];
-        $queue = $initialTraits;
+        /** @var list<array{trait: string, overridden: array<string, true>, excluded: array<string, array<string, true>>}> $queue */
+        $queue = [];
+        foreach ($initialTraits as $traitLower) {
+            $queue[] = ['trait' => $traitLower, 'overridden' => $overriddenMethods, 'excluded' => $excludedTraitMethods];
+        }
 
-        while (($traitLower = array_pop($queue)) !== null) {
+        while (($frame = array_pop($queue)) !== null) {
+            $traitLower = $frame['trait'];
             if (isset($visited[$traitLower])) {
                 continue;
             }
             $visited[$traitLower] = true;
 
-            if (isset($this->traitLifecycle[$traitLower]) && array_key_exists($aliasName, $this->traitLifecycle[$traitLower])) {
-                $targets = $this->traitLifecycle[$traitLower][$aliasName];
-                if ($targets === null) {
-                    return null;
+            foreach ($this->traitLifecycle[$traitLower] ?? [] as $methodLower => $aliasMap) {
+                if (isset($frame['overridden'][$methodLower]) || isset($frame['excluded'][$traitLower][$methodLower])) {
+                    continue;
                 }
-                $sets[] = $targets;
+                if (array_key_exists($aliasName, $aliasMap)) {
+                    $targets = $aliasMap[$aliasName];
+                    if ($targets === null) {
+                        return null;
+                    }
+                    $sets[] = $targets;
+                }
+            }
+
+            $nextOverridden = $frame['overridden'];
+            foreach ($this->traitDeclaredMethods[$traitLower] ?? [] as $declaredLower => $_) {
+                $nextOverridden[$declaredLower] = true;
+            }
+            $nextExcluded = $frame['excluded'];
+            foreach ($this->traitExcludedMethods[$traitLower] ?? [] as $exclTrait => $methods) {
+                foreach ($methods as $methodLower => $_) {
+                    $nextExcluded[$exclTrait][$methodLower] = true;
+                }
             }
 
             foreach ($this->traitParents[$traitLower] ?? [] as $parentTrait) {
                 if (!isset($visited[$parentTrait])) {
-                    $queue[] = $parentTrait;
+                    $queue[] = ['trait' => $parentTrait, 'overridden' => $nextOverridden, 'excluded' => $nextExcluded];
                 }
             }
         }
@@ -231,35 +286,48 @@ final class NamedMockIndex implements CodebaseScanHook
 
     /**
      * @param array<string, list<string>> $traitParents
+     * @param array<string, array<string, true>> $traitDeclaredMethods
+     * @param array<string, array<string, array<string, true>>> $traitExcludedMethods
      */
-    private static function recordTraitUses(SourceFile $source, array &$traitParents): void
-    {
+    private static function recordTraitStructure(
+        SourceFile $source,
+        array &$traitParents,
+        array &$traitDeclaredMethods,
+        array &$traitExcludedMethods,
+    ): void {
         foreach ($source->getNodes(NodeKind::Trait) as $traitNode) {
             $fqcn = self::classLikeFqcn($source, $traitNode);
             if ($fqcn === null) {
                 continue;
             }
 
-            $used = self::usedTraitsOfClassLike($source, $traitNode);
-            if ($used === []) {
-                continue;
+            $lower = strtolower($fqcn);
+            foreach (self::declaredMethodNamesOfClassLike($source, $traitNode) as $methodLower) {
+                $traitDeclaredMethods[$lower][$methodLower] = true;
             }
 
-            $lower = strtolower($fqcn);
-            $existing = $traitParents[$lower] ?? [];
-            $merged = [];
-            foreach ($existing as $t) {
-                $merged[$t] = true;
+            [$used, $excluded] = self::usedTraitsAndExclusionsOfClassLike($source, $traitNode);
+            if ($used !== []) {
+                $merged = [];
+                foreach ($traitParents[$lower] ?? [] as $t) {
+                    $merged[$t] = true;
+                }
+                foreach ($used as $t) {
+                    $merged[$t] = true;
+                }
+                $traitParents[$lower] = array_keys($merged);
             }
-            foreach ($used as $t) {
-                $merged[$t] = true;
+
+            foreach ($excluded as $exclTrait => $methods) {
+                foreach ($methods as $methodLower) {
+                    $traitExcludedMethods[$lower][$exclTrait][$methodLower] = true;
+                }
             }
-            $traitParents[$lower] = array_keys($merged);
         }
     }
 
     /**
-     * @param array<string, array<string, ?TargetSet>> $traitLifecycle
+     * @param array<string, array<string, array<string, ?TargetSet>>> $traitLifecycle
      * @return array{
      *     methods: array<string, array<string, list<MethodAliasEntry>>>,
      *     lifecycle: array<string, array<string, ?TargetSet>>
@@ -296,7 +364,7 @@ final class NamedMockIndex implements CodebaseScanHook
      *     methods: array<string, array<string, list<MethodAliasEntry>>>,
      *     lifecycle: array<string, array<string, ?TargetSet>>
      * } $aliases
-     * @param array<string, array<string, ?TargetSet>> $traitLifecycle
+     * @param array<string, array<string, array<string, ?TargetSet>>> $traitLifecycle
      */
     private static function extractNamedMockCall(
         SourceFile $source,
@@ -336,8 +404,12 @@ final class NamedMockIndex implements CodebaseScanHook
 
                 if ($classNode->kind === NodeKind::Trait) {
                     $traitFqcn = self::classLikeFqcn($source, $classNode);
-                    if ($traitFqcn !== null) {
-                        self::recordLifecycleEntry($traitLifecycle, strtolower($traitFqcn), $aliasName, $resolved);
+                    $methodName = self::methodNameOfNode($source, $callable);
+                    if ($traitFqcn !== null && $methodName !== null) {
+                        $traitLower = strtolower($traitFqcn);
+                        $methodLower = strtolower($methodName);
+                        $traitLifecycle[$traitLower] ??= [];
+                        self::recordLifecycleEntry($traitLifecycle[$traitLower], $methodLower, $aliasName, $resolved);
                     }
                 }
 
@@ -467,6 +539,8 @@ final class NamedMockIndex implements CodebaseScanHook
                 continue;
             }
 
+            usort($entries, static fn (array $a, array $b): int => $a['end'] <=> $b['end']);
+
             /** @var ?MethodAliasEntry $latestDominating */
             $latestDominating = null;
             /** @var list<MethodAliasEntry> $conditionals */
@@ -505,6 +579,8 @@ final class NamedMockIndex implements CodebaseScanHook
         }
 
         $usedTraits = [];
+        $overriddenMethods = [];
+        $excludedTraitMethods = [];
         if (!$dominated) {
             $classNode = self::enclosingClassNode($source, $call);
             if ($classNode !== null) {
@@ -517,17 +593,26 @@ final class NamedMockIndex implements CodebaseScanHook
                         $localSets[] = $lifecycleTargets;
                     }
                 }
-                $usedTraits = self::usedTraitsOfClassLike($source, $classNode);
+                [$usedTraits, $excludedTraitMethods] = self::usedTraitsAndExclusionsOfClassLike($source, $classNode);
+                $overriddenMethods = self::declaredMethodNamesOfClassLike($source, $classNode);
             }
         }
 
         sort($usedTraits);
+        sort($overriddenMethods);
+        ksort($excludedTraitMethods);
+        foreach ($excludedTraitMethods as $traitLower => $methods) {
+            sort($methods);
+            $excludedTraitMethods[$traitLower] = $methods;
+        }
 
         return [
             'localSets' => self::dedupeTargetSets($localSets),
             'dominated' => $dominated,
             'unresolved' => $unresolved,
             'usedTraits' => $usedTraits,
+            'overriddenMethods' => $overriddenMethods,
+            'excludedTraitMethods' => $excludedTraitMethods,
         ];
     }
 
@@ -548,6 +633,22 @@ final class NamedMockIndex implements CodebaseScanHook
                 $children = $source->getChildren($parent);
                 $op = isset($children[1]) ? strtolower(trim($source->getText($children[1]))) : '';
                 if (isset(self::SHORT_CIRCUIT_OPERATORS[$op]) && isset($children[2]) && $children[2]->id === $current->id) {
+                    return false;
+                }
+            }
+
+            if ($parent->kind === NodeKind::NullSafeMethodCall) {
+                $children = $source->getChildren($parent);
+                if (!isset($children[0]) || $children[0]->id !== $current->id) {
+                    return false;
+                }
+            }
+
+            if ($parent->kind === NodeKind::Assignment) {
+                $children = $source->getChildren($parent);
+                $op = isset($children[1]) ? trim($source->getText($children[1])) : '';
+                $rhs = $children !== [] ? $children[count($children) - 1] : null;
+                if ($op === '??=' && $rhs !== null && $rhs->id === $current->id) {
                     return false;
                 }
             }
@@ -839,11 +940,56 @@ final class NamedMockIndex implements CodebaseScanHook
     }
 
     /**
-     * @return list<string> Lowercased FQCNs of traits directly used by $classLike.
+     * @return list<string> Lowercased method names declared directly on $classLike.
      */
-    private static function usedTraitsOfClassLike(SourceFile $source, Node $classLike): array
+    private static function declaredMethodNamesOfClassLike(SourceFile $source, Node $classLike): array
+    {
+        $methods = [];
+        foreach ($source->getDescendants($classLike, NodeKind::Method) as $methodNode) {
+            if (self::enclosingClassNode($source, $methodNode)?->id !== $classLike->id) {
+                continue;
+            }
+            $name = self::methodNameOfNode($source, $methodNode);
+            if ($name !== null) {
+                $methods[strtolower($name)] = true;
+            }
+        }
+
+        return array_keys($methods);
+    }
+
+    private static function methodNameOfNode(SourceFile $source, Node $methodNode): ?string
+    {
+        $body = self::findChildOfKind($source, $methodNode, NodeKind::MethodBody);
+        $bodyStart = $body?->span->start ?? $methodNode->span->end;
+        foreach ($source->getChildren($methodNode) as $child) {
+            if ($child->span->start >= $bodyStart) {
+                break;
+            }
+            if ($child->kind === NodeKind::LocalIdentifier) {
+                return $source->getText($child);
+            }
+        }
+
+        $text = $source->getText($methodNode);
+        $brace = strpos($text, '{');
+        $header = $brace === false ? $text : substr($text, 0, $brace);
+        $matches = [];
+        if (preg_match('/function\s+(\w+)/i', $header, $matches) === 1) {
+            return $matches[1];
+        }
+
+        return null;
+    }
+
+    /**
+     * @return array{0: list<string>, 1: array<string, list<string>>} [usedTraits, excludedTraitLower => list<methodLower>]
+     */
+    private static function usedTraitsAndExclusionsOfClassLike(SourceFile $source, Node $classLike): array
     {
         $used = [];
+        $excluded = [];
+
         foreach ($source->getDescendants($classLike, NodeKind::TraitUse) as $traitUse) {
             if (self::enclosingClassNode($source, $traitUse)?->id !== $classLike->id) {
                 continue;
@@ -855,40 +1001,73 @@ final class NamedMockIndex implements CodebaseScanHook
                     || $child->kind === NodeKind::TraitUseAbstractSpecification
                     || $child->kind === NodeKind::TraitUseConcreteSpecification
                 ) {
+                    foreach ($source->getDescendants($child, NodeKind::TraitUsePrecedenceAdaptation) as $precedence) {
+                        $precChildren = $source->getChildren($precedence);
+                        $refNode = $precChildren[0] ?? null;
+                        $methodName = null;
+                        if ($refNode !== null) {
+                            foreach ($source->getDescendants($refNode, NodeKind::LocalIdentifier) as $ident) {
+                                $methodName = $source->getText($ident);
+                            }
+                        }
+                        if ($methodName === null) {
+                            continue;
+                        }
+                        $methodLower = strtolower($methodName);
+                        for ($k = 1, $n = count($precChildren); $k < $n; ++$k) {
+                            $exclFqcn = self::resolveIdentifierNodeFqcn($source, $precChildren[$k], $classLike);
+                            if ($exclFqcn !== null) {
+                                $excluded[strtolower($exclFqcn)][$methodLower] = true;
+                            }
+                        }
+                    }
                     continue;
                 }
 
-                $ident = self::unwrap($source, $child);
-                if (
-                    $ident === null
-                    || (
-                        $ident->kind !== NodeKind::LocalIdentifier
-                        && $ident->kind !== NodeKind::QualifiedIdentifier
-                        && $ident->kind !== NodeKind::FullyQualifiedIdentifier
-                    )
-                ) {
-                    continue;
+                $resolved = self::resolveIdentifierNodeFqcn($source, $child, $classLike);
+                if ($resolved !== null) {
+                    $used[strtolower($resolved)] = true;
                 }
-
-                $resolved = $source->getResolvedName($ident)?->name ?? $source->getResolvedName($child)?->name;
-                if ($resolved === null || $resolved === '') {
-                    $raw = ltrim(trim($source->getText($ident)), '\\');
-                    if ($raw === '') {
-                        continue;
-                    }
-                    if ($ident->kind !== NodeKind::FullyQualifiedIdentifier) {
-                        $ns = self::enclosingNamespaceName($source, $classLike);
-                        $resolved = $ns !== '' ? $ns . '\\' . $raw : $raw;
-                    } else {
-                        $resolved = $raw;
-                    }
-                }
-
-                $used[strtolower(ltrim($resolved, '\\'))] = true;
             }
         }
 
-        return array_keys($used);
+        $excludedList = [];
+        foreach ($excluded as $traitLower => $methods) {
+            $excludedList[$traitLower] = array_keys($methods);
+        }
+
+        return [array_keys($used), $excludedList];
+    }
+
+    private static function resolveIdentifierNodeFqcn(SourceFile $source, Node $node, Node $classLike): ?string
+    {
+        $ident = self::unwrap($source, $node);
+        if (
+            $ident === null
+            || (
+                $ident->kind !== NodeKind::LocalIdentifier
+                && $ident->kind !== NodeKind::QualifiedIdentifier
+                && $ident->kind !== NodeKind::FullyQualifiedIdentifier
+            )
+        ) {
+            return null;
+        }
+
+        $resolved = $source->getResolvedName($ident)?->name ?? $source->getResolvedName($node)?->name;
+        if ($resolved === null || $resolved === '') {
+            $raw = ltrim(trim($source->getText($ident)), '\\');
+            if ($raw === '') {
+                return null;
+            }
+            if ($ident->kind !== NodeKind::FullyQualifiedIdentifier) {
+                $ns = self::enclosingNamespaceName($source, $classLike);
+                $resolved = $ns !== '' ? $ns . '\\' . $raw : $raw;
+            } else {
+                $resolved = $raw;
+            }
+        }
+
+        return ltrim($resolved, '\\');
     }
 
     private static function isLifecycleCallable(SourceFile $source, Node $callable): bool

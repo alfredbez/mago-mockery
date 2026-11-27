@@ -50,17 +50,23 @@ $expected = [
             'mixed-return-statement' => 1,
             'redundant-null-coalesce' => 3,
         ],
-        'tests/fixtures/Wave9FactoriesAndTraits.php' => [],
+        'tests/fixtures/Wave9FactoriesAndTraits.php' => [
+            // Unnarrowed `mixed` argument to Mockery::mock() is rejected by the tightened factory signature.
+            'mixed-argument' => 1,
+        ],
         'tests/fixtures/Wave12Contracts.php' => [],
         'tests/fixtures/NamedMockScoping.php' => [],
         'tests/fixtures/NamedMockScopingNegative.php' => [
-            'non-existent-method' => 2,
+            'non-existent-method' => 4,
         ],
         'tests/fixtures/SignatureOverridesAndUnions.php' => [
             'deprecated-method' => 1,
         ],
         'tests/fixtures/SignatureOverridesAndUnionsNegative.php' => [
-            'invalid-argument' => 4,
+            'false-argument' => 2,
+            'invalid-argument' => 6,
+            'null-argument' => 1,
+            'too-few-arguments' => 2,
             'too-many-arguments' => 1,
         ],
         'tests/fixtures/IntersectionControl.php' => [
@@ -72,7 +78,7 @@ $expected = [
         ],
         'tests/fixtures/TraitConstantProvenanceNegative.php' => [
             'deprecated-method' => 1,
-            'direct-trait-constant-access' => 50,
+            'direct-trait-constant-access' => 52,
             'redundant-null-coalesce' => 4,
         ],
         'tests/fixtures/Wave9FactoriesAndTraitsNegative.php' => [
@@ -153,7 +159,7 @@ $expected = [
             'deprecated-method' => 1,
             'direct-trait-constant-access' => 22,
             'mixed-assignment' => 1,
-            'non-existent-class-constant' => 27,
+            'non-existent-class-constant' => 29,
             'non-existent-method' => 1,
             'possibly-invalid-argument' => 1,
             'redundant-null-coalesce' => 4,
@@ -178,18 +184,19 @@ $expected = [
         ],
         'tests/fixtures/NamedMockScoping.php' => [
             'impossible-condition' => 1,
-            'invalid-argument' => 1,
+            'invalid-argument' => 3,
             'mixed-return-statement' => 1,
-            'non-existent-method' => 6,
+            'non-existent-method' => 8,
             'possibly-invalid-argument' => 2,
         ],
         'tests/fixtures/NamedMockScopingNegative.php' => [
-            'non-existent-method' => 2,
+            'invalid-argument' => 1,
+            'non-existent-method' => 4,
         ],
         'tests/fixtures/SignatureOverridesAndUnions.php' => [
             'deprecated-method' => 1,
             'non-documented-method' => 8,
-            'non-existent-method' => 8,
+            'non-existent-method' => 9,
             'redundant-condition' => 1,
             'unreachable-else-clause' => 1,
         ],
@@ -249,7 +256,7 @@ foreach ([
     ],
     'tests/fixtures/TraitConstantProvenanceNegative.php' => [
         'deprecated-method' => 1,
-        'direct-trait-constant-access' => 50,
+        'direct-trait-constant-access' => 52,
         'redundant-null-coalesce' => 4,
     ],
 ] as $fixtureFile => $expectedCounts) {
@@ -262,7 +269,7 @@ foreach ([
 
 foreach ([
     'tests/fixtures/TraitConstantDominanceAndAliasesNegative.php' => [34, 43, 54, 61, 69, 77, 85, 96, 103, 112, 119, 129, 136, 143, 150, 160, 170, 181, 191, 198],
-    'tests/fixtures/TraitConstantProvenanceNegative.php' => [74, 96, 105, 118, 128, 136, 144, 156, 163, 172, 185, 198, 205, 217, 223, 230, 236, 243, 250, 257, 264, 273, 280, 291, 307, 319, 335, 345, 353, 369, 385, 402, 415, 429, 437, 445],
+    'tests/fixtures/TraitConstantProvenanceNegative.php' => [74, 96, 105, 118, 128, 136, 144, 156, 163, 172, 185, 198, 205, 217, 223, 230, 236, 243, 250, 257, 264, 273, 280, 291, 307, 319, 335, 345, 353, 369, 385, 402, 415, 429, 437, 445, 458, 471],
 ] as $negativeFile => $expectedLines) {
     foreach ($expectedLines as $expectedLine) {
         $found = 0;
@@ -527,8 +534,10 @@ $compat1612Without = analyze(true, 'tests/mockery-1612.toml');
 $failures += assertHistograms('mockery 1.6.12 with extension', $compat1612With, [
     'tests/mockery-1612-fixtures/Mockery1612Compat.php' => [],
     'tests/mockery-1612-fixtures/Mockery1612Negative.php' => [
-        'invalid-argument' => 2,
+        'false-argument' => 1,
+        'invalid-argument' => 3,
         'non-existent-method' => 5,
+        'too-few-arguments' => 2,
         'too-many-arguments' => 1,
     ],
 ]);
@@ -543,7 +552,8 @@ $failures += assertHistograms('mockery 1.6.12 --no-extensions', $compat1612Witho
         'too-many-arguments' => 2,
     ],
     'tests/mockery-1612-fixtures/Mockery1612Negative.php' => [
-        'invalid-argument' => 4,
+        'false-argument' => 1,
+        'invalid-argument' => 5,
         'non-existent-method' => 5,
         'too-many-arguments' => 1,
     ],
@@ -584,7 +594,7 @@ $failures += assertHistograms('strict enabled mode', $strictEnabled, [
         'alfredbez/mockery/unknown-mocked-method' => 5,
     ],
     'tests/strict-fixtures/StrictAllowancesAndUnions.php' => [
-        'alfredbez/mockery/unknown-mocked-method' => 8,
+        'alfredbez/mockery/unknown-mocked-method' => 14,
     ],
 ]);
 foreach ([
@@ -624,6 +634,12 @@ foreach ([
     'missingUnionA',
     'missingUnionB',
     'missingUnionPartial',
+    'MISSINGCASE',
+    'dynAfterBareWith',
+    'dynAfterUnpackInline',
+    'dynAfterUnpackVar',
+    'dynAfterByRefCtor',
+    'dynPropAfterTestCaseHelper',
 ] as $missingMethod) {
     $failures += assertMessageCount(
         'strict enabled mode',
@@ -635,12 +651,36 @@ foreach ([
     );
 }
 $failures += assertMessageCount(
+    'strict enabled mode',
+    $strictEnabled,
+    'tests/strict-fixtures/StrictAllowancesAndUnions.php',
+    'alfredbez/mockery/unknown-mocked-method',
+    'Method `missingCase` does not exist on mocked type `MockeryFixture\\Strict\\StrictGreeter`',
+    0,
+);
+$failures += assertMessageCount(
     'with extension',
     $with,
     'tests/fixtures/NamedMockScopingNegative.php',
     'non-existent-method',
     'Method `fetch` does not exist on type `MockeryFixture\\Greeter`',
+    3,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/SignatureOverridesAndUnionsNegative.php',
+    'too-few-arguments',
+    'Mockery::namedMock',
     1,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/SignatureOverridesAndUnionsNegative.php',
+    'too-few-arguments',
+    'namedMock',
+    2,
 );
 $failures += assertMessageCount(
     'with extension',

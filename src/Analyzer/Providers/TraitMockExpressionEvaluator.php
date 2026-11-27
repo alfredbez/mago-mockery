@@ -13,6 +13,7 @@ use PhpToken;
 
 use function count;
 use function ltrim;
+use function str_contains;
 use function strlen;
 use function strtolower;
 use function substr;
@@ -49,19 +50,11 @@ final class TraitMockExpressionEvaluator
         'shouldnothavereceived' => true, 'shouldnotreceive' => true, 'shouldreceive' => true,
     ];
     private const NON_REENTRANT_MOCKERY_METHODS = [
-        'allows' => true, 'andanyotherargs' => true, 'andanyothers' => true, 'andreturn' => true,
-        'andreturnarg' => true, 'andreturnnull' => true, 'andreturnself' => true, 'andreturnusing' => true,
-        'andreturnvalues' => true, 'andset' => true, 'andthrow' => true, 'any' => true, 'anyof' => true,
-        'asundefined' => true, 'atleast' => true, 'atmost' => true, 'between' => true, 'bydefault' => true,
-        'contains' => true, 'ducktype' => true, 'expects' => true, 'fetchmock' => true,
-        'getcontainer' => true, 'getmock' => true, 'globally' => true, 'haskey' => true, 'hasvalue' => true,
-        'instancemock' => true, 'makepartial' => true, 'mock' => true, 'mustbe' => true, 'namedmock' => true,
-        'never' => true, 'not' => true, 'once' => true, 'ordered' => true, 'passthru' => true,
-        'pattern' => true, 'shouldallowmockingmethod' => true, 'shouldallowmockingprotectedmethods' => true,
-        'shoulddefermissing' => true, 'shouldhavereceived' => true, 'shouldignoremissing' => true,
-        'shouldnotreceive' => true, 'shouldreceive' => true, 'spy' => true, 'subset' => true,
-        'times' => true, 'twice' => true, 'type' => true, 'with' => true, 'withanyargs' => true,
-        'withargs' => true, 'withnoargs' => true, 'zeroormoretimes' => true,
+        'andanyotherargs' => true, 'andanyothers' => true, 'any' => true, 'anyof' => true,
+        'contains' => true, 'ducktype' => true, 'fetchmock' => true, 'getcontainer' => true,
+        'haskey' => true, 'hasvalue' => true, 'instancemock' => true, 'isequal' => true,
+        'issame' => true, 'mock' => true, 'mustbe' => true, 'namedmock' => true, 'not' => true,
+        'notanyof' => true, 'pattern' => true, 'spy' => true, 'subset' => true, 'type' => true,
     ];
     private const NON_REENTRANT_MOCK_OBJECT_METHODS = [
         'allows' => true, 'asundefined' => true, 'bydefault' => true, 'expects' => true, 'makepartial' => true,
@@ -896,10 +889,11 @@ final class TraitMockExpressionEvaluator
             $globalCandidate = strtolower($this->syntax->resolveGlobalFunctionCandidate($tok));
             $safe = isset(self::HELPER_FUNCTIONS[$globalCandidate]);
             $argsClose = $this->syntax->closeOf($i + 1);
+            $helperNonReentrant = $safe && $this->isDefinitelyGlobalMockeryHelper($tok, $globalCandidate);
             $meta = (!$safe && ($this->hasBareVariableArgument($i + 2, $argsClose) || ($trial->hasStaticLocalCells() && $this->areArgsPureLiterals($this->parseCallArguments($i + 2, $argsClose)))))
                 ? $this->resolveFunctionMetadata($tok)
                 : null;
-            $i = $this->evalCallAtParen($i + 1, $trial, $stopAtTarget, $meta, $safe, $safe);
+            $i = $this->evalCallAtParen($i + 1, $trial, $stopAtTarget, $meta, $safe, $helperNonReentrant, $helperNonReentrant);
             if (!$this->reachedTarget) {
                 if ($globalCandidate === 'extract') {
                     $trial->killAll();
@@ -915,10 +909,11 @@ final class TraitMockExpressionEvaluator
                 $isMockery = $className !== null && strtolower($className) === 'mockery';
                 $safe = $isMockery && isset(self::SAFE_MOCKERY_METHODS[$methodLower]);
                 $nonReentrant = $isMockery && isset(self::NON_REENTRANT_MOCKERY_METHODS[$methodLower]);
+                $isFactory = $isMockery && isset(self::FACTORY_METHODS[$methodLower]);
                 $meta = (!$safe && $className !== null && $this->hasBareVariableArgument($i + 4, $this->syntax->closeOf($i + 3)))
                     ? $this->codebase?->getDeclaringMethod($className, $memberTok->text)
                     : null;
-                $i = $this->evalCallAtParen($i + 3, $trial, $stopAtTarget, $meta, $safe, $nonReentrant);
+                $i = $this->evalCallAtParen($i + 3, $trial, $stopAtTarget, $meta, $safe, $nonReentrant, $isFactory);
                 if (!$this->reachedTarget && $isMockery) {
                     if (isset(self::FACTORY_METHODS[$methodLower])) {
                         $val = TraitMockAliasState::mockValue();
@@ -963,13 +958,14 @@ final class TraitMockExpressionEvaluator
                     $safe = ($val['container'] && isset(self::FACTORY_METHODS[$methodLower]))
                         || ($val['mock'] && isset(self::SAFE_MOCK_OBJECT_METHODS[$methodLower]))
                         || ($inExpectationChain && isset(self::NON_REENTRANT_EXPECTATION_METHODS[$methodLower]));
-                    $nonReentrant = ($val['container'] && isset(self::FACTORY_METHODS[$methodLower]))
+                    $isContainerFactory = $val['container'] && isset(self::FACTORY_METHODS[$methodLower]);
+                    $nonReentrant = $isContainerFactory
                         || ($val['mock'] && isset(self::NON_REENTRANT_MOCK_OBJECT_METHODS[$methodLower]))
                         || ($inExpectationChain && isset(self::NON_REENTRANT_EXPECTATION_METHODS[$methodLower]));
                     $meta = (!$safe && $baseIsThis && $this->enclosingClass !== null && $this->hasBareVariableArgument($i + 3, $this->syntax->closeOf($i + 2)))
                         ? $this->codebase?->getDeclaringMethod($this->enclosingClass, $member->text)
                         : null;
-                    $i = $this->evalCallAtParen($i + 2, $trial, $stopAtTarget, $meta, $safe, $nonReentrant);
+                    $i = $this->evalCallAtParen($i + 2, $trial, $stopAtTarget, $meta, $safe, $nonReentrant, $isContainerFactory);
                     $nextInExpectationChain = ($val['mock'] && isset(self::EXPECTATION_FACTORY_METHODS[$methodLower]))
                         || ($inExpectationChain && isset(self::NON_REENTRANT_EXPECTATION_METHODS[$methodLower]) && $methodLower !== 'getmock' && $methodLower !== 'mock');
                     $val = (!$isNullsafe && (($val['container'] && isset(self::FACTORY_METHODS[$methodLower])) || ($val['mock'] && isset(self::FLUENT_PRESERVING_METHODS[$methodLower]))))
@@ -1046,6 +1042,7 @@ final class TraitMockExpressionEvaluator
         ?FunctionLikeMetadata $calleeMeta,
         bool $knownSafeByValue,
         bool $knownSafeNonReentrant = false,
+        bool $isMockeryFactory = false,
     ): int {
         $close = $this->syntax->closeOf($openParen);
         $args = $this->parseCallArguments($openParen + 1, $close);
@@ -1062,13 +1059,47 @@ final class TraitMockExpressionEvaluator
         }
         $this->invalidateByRefArguments($args, $state, $calleeMeta, $knownSafeByValue);
         $state->killEscapedCells();
-        $isNonReentrant = ($knownSafeNonReentrant && $this->areArgsPureLiterals($args))
+        $isNonReentrant = ($knownSafeNonReentrant && $this->areArgsPureLiterals($args) && (!$isMockeryFactory || $this->hasNoPartialMockSpec($args)))
             || $this->isNonReentrantCallee($calleeMeta, $args);
         if (!$isNonReentrant) {
             $state->killStaticLocalCells();
         }
 
         return $close + 1;
+    }
+
+    /**
+     * Partial specs such as `C::class . '[ping]'` trigger `C::__construct()` inside
+     * `Mockery\Container::mock()` even without a constructor-arguments array.
+     *
+     * @param list<CallArgument> $args
+     */
+    private function hasNoPartialMockSpec(array $args): bool
+    {
+        $tokens = $this->syntax->tokens;
+        foreach ($args as $arg) {
+            for ($k = $arg['start']; $k < $arg['end']; ++$k) {
+                if ($tokens[$k]->id === T_CONSTANT_ENCAPSED_STRING && str_contains($tokens[$k]->text, '[')) {
+                    return false;
+                }
+            }
+        }
+
+        return true;
+    }
+
+    private function isDefinitelyGlobalMockeryHelper(PhpToken $tok, string $globalCandidate): bool
+    {
+        if ($tok->id === T_NAME_FULLY_QUALIFIED) {
+            return true;
+        }
+
+        $imports = $this->syntax->imports;
+        if ($imports['namespace'] === '' || isset($imports['functions'][$globalCandidate])) {
+            return true;
+        }
+
+        return $this->codebase !== null && $this->codebase->getFunction($imports['namespace'] . '\\' . $tok->text) === null;
     }
 
     /** @param list<CallArgument> $args */

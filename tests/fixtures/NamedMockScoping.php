@@ -81,4 +81,37 @@ final class NamedMockScoping extends Support
             $fetched->greet('narrowed');
         }
     }
+
+    public function interleavedGlobalAndStaticOrder(bool $flag): void
+    {
+        if ($flag) {
+            namedMock('InterleavedOrderAlias', Greeter::class);
+        }
+        Mockery::namedMock('InterleavedOrderAlias', ApiClient::class);
+
+        $fetched = Mockery::fetchMock('InterleavedOrderAlias');
+        if ($fetched !== null) {
+            $fetched->fetch(1);
+            $this->acceptApiClient($fetched);
+        }
+    }
+}
+
+final class NamedMockOverriddenTraitSetUp extends Support
+{
+    use NamedMockSetupTrait;
+
+    public function setUp(): void
+    {
+        Mockery::namedMock('TraitLifecycleAlias', ApiClient::class);
+    }
+
+    public function ownSetUpOverridesTraitLifecycleAlias(): void
+    {
+        $fetched = Mockery::fetchMock('TraitLifecycleAlias');
+        if ($fetched !== null) {
+            $fetched->fetch(1);
+            $this->acceptApiClient($fetched);
+        }
+    }
 }

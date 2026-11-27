@@ -28,6 +28,14 @@ interface StrictRuntimeHolder
     public function getChildMock(): StrictRuntimeGreeter&MockInterface;
 }
 
+final class StrictRuntimeMutator
+{
+    public function with(MockInterface &$target): void
+    {
+        $target = Mockery::mock(StrictRuntimeGreeter::class);
+    }
+}
+
 final class NamedMockAndStrictRuntimeTest extends TestCase
 {
     private StrictRuntimeGreeter&MockInterface $prop;
@@ -128,5 +136,34 @@ final class NamedMockAndStrictRuntimeTest extends TestCase
             }
             self::assertTrue($threw, 'Both unknown literal branches must throw Mockery\\Exception.');
         }
+    }
+
+    public function testStrictBareMethodNameWithByRefInvalidatesLocalAllowance(): void
+    {
+        Mockery::getConfiguration()->allowMockingNonExistentMethods(false);
+
+        $mutator = new StrictRuntimeMutator();
+        $mock = Mockery::mock(StrictRuntimeGreeter::class);
+        $mock->shouldAllowMockingMethod('dynAfterBareWith');
+        $mutator->with($mock);
+
+        $this->expectException(MockeryException::class);
+        $mock->shouldReceive('dynAfterBareWith');
+    }
+
+    public function testStrictUnpackedByRefInvalidatesLocalAllowance(): void
+    {
+        Mockery::getConfiguration()->allowMockingNonExistentMethods(false);
+
+        $replace = static function (MockInterface &$target): void {
+            $target = Mockery::mock(StrictRuntimeGreeter::class);
+        };
+
+        $mock = Mockery::mock(StrictRuntimeGreeter::class);
+        $mock->shouldAllowMockingMethod('dynAfterUnpack');
+        $replace(...[&$mock]);
+
+        $this->expectException(MockeryException::class);
+        $mock->shouldReceive('dynAfterUnpack');
     }
 }

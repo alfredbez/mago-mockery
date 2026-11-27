@@ -15,8 +15,10 @@ use function array_intersect_key;
 use function array_keys;
 use function array_pop;
 use function count;
+use function in_array;
 use function ltrim;
 use function preg_match;
+use function preg_match_all;
 use function preg_replace;
 use function str_contains;
 use function str_starts_with;
@@ -38,6 +40,8 @@ use function trim;
  *     allowed: array<string, array<string, true>>,
  *     refs: array<string, array<string, true>>,
  *     thisAliases: array<string, true>,
+ *     varClasses: array<string, string>,
+ *     escapedVars: array<string, true>,
  *     terminated: bool
  * }
  *
@@ -151,6 +155,8 @@ final class StrictAllowanceResolver
             'allowed' => [],
             'refs' => [],
             'thisAliases' => [],
+            'varClasses' => self::seedScopeVarClasses($source, $scope),
+            'escapedVars' => [],
             'terminated' => false,
         ];
 
@@ -715,6 +721,10 @@ final class StrictAllowanceResolver
             return;
         }
 
+        if ($unwrapped->kind === NodeKind::Array || $unwrapped->kind === NodeKind::LegacyArray) {
+            self::recordArrayReferenceEscapes($source, $unwrapped, $state);
+        }
+
         foreach ($source->getChildren($unwrapped) as $child) {
             self::processExpression($source, $child, $state, $nextId, $allowGrants, $codebase);
         }
@@ -763,6 +773,13 @@ final class StrictAllowanceResolver
                 $state['thisAliases'][$lhsVar] = true;
             } else {
                 unset($state['thisAliases'][$lhsVar]);
+            }
+
+            $rhsClass = ($op === '=' && $rhsNode !== null) ? self::inferRhsClassName($source, $rhsNode, $state) : null;
+            if ($rhsClass !== null) {
+                $state['varClasses'][$lhsVar] = $rhsClass;
+            } else {
+                unset($state['varClasses'][$lhsVar]);
             }
         }
 
@@ -891,13 +908,14 @@ final class StrictAllowanceResolver
 
         if (isset($children[0]) && self::isThisOrAlias($source, $children[0], $state)) {
             if (!isset(self::FLUENT_PRESERVING_METHODS[$calledLower])) {
-                self::killThisProperties($state, $nextId);
+                $thisMethodMeta = self::resolveMethodCallMetadata($source, $call, $state, $codebase);
+                if ($thisMethodMeta === null || !self::isFrameworkSafeThisMethod($thisMethodMeta)) {
+                    self::killThisProperties($state, $nextId);
+                }
             }
         }
 
-        if (!isset(self::FLUENT_PRESERVING_METHODS[$calledLower]) && !isset(self::EXPECTATION_CHAIN_METHODS[$calledLower])) {
-            self::invalidateCallArguments($source, $call, $state, $nextId, $codebase);
-        }
+        self::invalidateCallArguments($source, $call, $state, $nextId, $codebase);
 
         if (!$allowGrants || $call->kind !== NodeKind::MethodCall) {
             return;
@@ -1005,6 +1023,14 @@ final class StrictAllowanceResolver
             self::killCatchVariable($source, $catchNode, $state, $nextId);
         }
 
+        foreach ([NodeKind::Array, NodeKind::LegacyArray] as $arrayKind) {
+            foreach ($source->getDescendants($subtree, $arrayKind) as $arrayNode) {
+                if (!self::isInsideNestedScope($source, $subtree, $arrayNode)) {
+                    self::recordArrayReferenceEscapes($source, $arrayNode, $state);
+                }
+            }
+        }
+
         foreach ([NodeKind::MethodCall, NodeKind::NullSafeMethodCall] as $callKind) {
             foreach ($source->getDescendants($subtree, $callKind) as $methodCall) {
                 if (self::isInsideNestedScope($source, $subtree, $methodCall)) {
@@ -1014,11 +1040,12 @@ final class StrictAllowanceResolver
                 $calledLower = $called !== null ? strtolower($called) : '';
                 $receiver = $source->getChildren($methodCall)[0] ?? null;
                 if ($receiver !== null && self::isThisOrAlias($source, $receiver, $state) && !isset(self::FLUENT_PRESERVING_METHODS[$calledLower])) {
-                    self::killThisProperties($state, $nextId);
+                    $thisMethodMeta = self::resolveMethodCallMetadata($source, $methodCall, $state, $codebase);
+                    if ($thisMethodMeta === null || !self::isFrameworkSafeThisMethod($thisMethodMeta)) {
+                        self::killThisProperties($state, $nextId);
+                    }
                 }
-                if (!isset(self::FLUENT_PRESERVING_METHODS[$calledLower]) && !isset(self::EXPECTATION_CHAIN_METHODS[$calledLower])) {
-                    self::invalidateCallArguments($source, $methodCall, $state, $nextId, $codebase);
-                }
+                self::invalidateCallArguments($source, $methodCall, $state, $nextId, $codebase);
             }
         }
 
@@ -1047,8 +1074,9 @@ final class StrictAllowanceResolver
             return;
         }
 
-        $knownSafeByValue = self::isKnownSafeByValueStaticCall($source, $call);
-        $meta = $knownSafeByValue ? null : self::resolveCallMetadata($source, $call, $codebase);
+        $target = self::resolveCallTarget($source, $call, $state, $codebase);
+        $status = $target['status'];
+        $meta = $target['meta'];
 
         $posIdx = 0;
         $seenUnpack = false;
@@ -1065,6 +1093,8 @@ final class StrictAllowanceResolver
                 $argText = ltrim($source->getText($variant));
                 if (str_starts_with($argText, '...')) {
                     $seenUnpack = true;
+                    $unpackedNode = $parts[0] ?? null;
+                    self::invalidateUnpackedArgument($source, $unpackedNode, $state, $nextId, $status, $meta, $posIdx);
                     ++$posIdx;
                     continue;
                 }
@@ -1078,21 +1108,113 @@ final class StrictAllowanceResolver
             }
 
             if ($valueNode !== null) {
-                if (!$knownSafeByValue && self::isThisOrAlias($source, $valueNode, $state)) {
+                if (
+                    $status !== 'known_by_value'
+                    && self::isThisOrAlias($source, $valueNode, $state)
+                    && !($status === 'resolved' && $meta !== null && self::isFrameworkSafeThisMethod($meta) && !self::parameterMayBeByRef($meta, $posIdx, $namedArg, $seenUnpack))
+                ) {
                     self::killThisProperties($state, $nextId);
                 }
 
                 $argKey = self::identityKey($source, $valueNode);
-                if (
-                    $argKey !== null
-                    && !$knownSafeByValue
-                    && ($meta === null || self::parameterMayBeByRef($meta, $posIdx, $namedArg, $seenUnpack))
-                ) {
-                    self::killVar($state, $argKey, $nextId);
+                if ($argKey !== null) {
+                    $mayMutate = ($status === 'resolved' && $meta !== null && self::parameterMayBeByRef($meta, $posIdx, $namedArg, $seenUnpack))
+                        || $status === 'unresolved';
+                    if ($mayMutate) {
+                        self::killVar($state, $argKey, $nextId);
+                    }
                 }
             }
 
             ++$posIdx;
+        }
+    }
+
+    /**
+     * @param ResolverState $state
+     */
+    private static function invalidateUnpackedArgument(
+        SourceFile $source,
+        ?Node $unpackedNode,
+        array &$state,
+        int &$nextId,
+        string $status,
+        ?FunctionLikeMetadata $meta,
+        int $posIdx,
+    ): void {
+        if ($unpackedNode !== null) {
+            self::recordArrayReferenceEscapes($source, $unpackedNode, $state);
+        }
+
+        if ($state['escapedVars'] !== []) {
+            foreach (array_keys($state['escapedVars']) as $escaped) {
+                self::killVar($state, $escaped, $nextId);
+            }
+        }
+
+        if ($unpackedNode === null) {
+            return;
+        }
+
+        $unwrapped = self::unwrap($source, $unpackedNode);
+        if ($unwrapped === null) {
+            return;
+        }
+
+        $hasLaterByRef = $status === 'unresolved'
+            || ($status === 'resolved' && $meta !== null && self::parameterMayBeByRef($meta, $posIdx, null, true));
+
+        if ($unwrapped->kind === NodeKind::Array || $unwrapped->kind === NodeKind::LegacyArray) {
+            foreach ($source->getDescendants($unwrapped, NodeKind::ArrayElement) as $element) {
+                $elemText = ltrim($source->getText($element));
+                $isRefElem = str_starts_with($elemText, '&') || str_contains($elemText, '=>&') || preg_match('/=>\s*&/', $elemText) === 1;
+                if (!$isRefElem && !$hasLaterByRef) {
+                    continue;
+                }
+                foreach ($source->getDescendants($element, NodeKind::DirectVariable) as $var) {
+                    $varName = $source->getText($var);
+                    if ($varName === '$this' || isset($state['thisAliases'][$varName])) {
+                        self::killThisProperties($state, $nextId);
+                    } else {
+                        self::killVar($state, $varName, $nextId);
+                    }
+                }
+                foreach ($source->getChildren($element) as $child) {
+                    $key = self::identityKey($source, $child);
+                    if ($key !== null) {
+                        self::killVar($state, $key, $nextId);
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * @param ResolverState $state
+     */
+    private static function recordArrayReferenceEscapes(SourceFile $source, Node $node, array &$state): void
+    {
+        if (!str_contains($source->getText($node), '&')) {
+            return;
+        }
+
+        foreach ($source->getDescendants($node, NodeKind::ArrayElement) as $element) {
+            $elemText = ltrim($source->getText($element));
+            if (!str_starts_with($elemText, '&') && preg_match('/=>\s*&/', $elemText) !== 1) {
+                continue;
+            }
+            foreach ($source->getDescendants($element, NodeKind::DirectVariable) as $var) {
+                $varName = $source->getText($var);
+                if ($varName !== '$this') {
+                    $state['escapedVars'][$varName] = true;
+                }
+            }
+            $matches = [];
+            if (preg_match_all('/\$this->([A-Za-z_][A-Za-z0-9_]*)/', $elemText, $matches) > 0) {
+                foreach ($matches[1] as $prop) {
+                    $state['escapedVars']['$this->' . $prop] = true;
+                }
+            }
         }
     }
 
@@ -1118,16 +1240,37 @@ final class StrictAllowanceResolver
         return $method !== null && isset(self::SAFE_BY_VALUE_MOCKERY_STATIC_METHODS[strtolower($method)]);
     }
 
-    private static function resolveCallMetadata(SourceFile $source, Node $call, ?Codebase $codebase): ?FunctionLikeMetadata
-    {
+    /**
+     * @param ResolverState $state
+     * @return array{status: 'known_by_value'|'resolved'|'unresolved_instance'|'unresolved', meta: ?FunctionLikeMetadata}
+     */
+    private static function resolveCallTarget(
+        SourceFile $source,
+        Node $call,
+        array $state,
+        ?Codebase $codebase,
+    ): array {
+        if (self::isKnownSafeByValueStaticCall($source, $call)) {
+            return ['status' => 'known_by_value', 'meta' => null];
+        }
+
+        if ($call->kind === NodeKind::MethodCall || $call->kind === NodeKind::NullSafeMethodCall) {
+            $meta = self::resolveMethodCallMetadata($source, $call, $state, $codebase);
+            if ($meta !== null) {
+                return ['status' => 'resolved', 'meta' => $meta];
+            }
+
+            return ['status' => 'unresolved_instance', 'meta' => null];
+        }
+
         if ($codebase === null) {
-            return null;
+            return ['status' => 'unresolved', 'meta' => null];
         }
 
         if ($call->kind === NodeKind::FunctionCall) {
             $callee = self::unwrap($source, $source->getChildren($call)[0] ?? null);
             if ($callee === null) {
-                return null;
+                return ['status' => 'unresolved', 'meta' => null];
             }
             if (
                 $callee->kind !== NodeKind::Identifier
@@ -1135,14 +1278,21 @@ final class StrictAllowanceResolver
                 && $callee->kind !== NodeKind::QualifiedIdentifier
                 && $callee->kind !== NodeKind::FullyQualifiedIdentifier
             ) {
-                return null;
+                return ['status' => 'unresolved', 'meta' => null];
             }
-            $name = ltrim($source->getResolvedName($callee)?->name ?? $source->getText($callee), '\\');
+            $raw = trim($source->getText($callee));
+            $name = ltrim($source->getResolvedName($callee)?->name ?? $raw, '\\');
             if ($name === '') {
-                return null;
+                return ['status' => 'unresolved', 'meta' => null];
+            }
+            $meta = $codebase->getFunction($name);
+            if ($meta === null && $raw !== '' && !str_contains($raw, '\\')) {
+                $meta = $codebase->getFunction($raw);
             }
 
-            return $codebase->getFunction($name);
+            return $meta !== null
+                ? ['status' => 'resolved', 'meta' => $meta]
+                : ['status' => 'unresolved', 'meta' => null];
         }
 
         if ($call->kind === NodeKind::StaticMethodCall) {
@@ -1150,30 +1300,331 @@ final class StrictAllowanceResolver
             $classNode = self::unwrap($source, $children[0] ?? null);
             $methodName = self::calledMethodName($source, $call);
             if ($classNode === null || $methodName === null) {
-                return null;
+                return ['status' => 'unresolved', 'meta' => null];
             }
-            $className = ltrim($source->getResolvedName($classNode)?->name ?? $source->getText($classNode), '\\');
-            if ($className === '' || $className[0] === '$') {
-                return null;
+            $className = self::resolveStaticClassName($source, $classNode, $state, $codebase);
+            if ($className === null) {
+                return ['status' => 'unresolved', 'meta' => null];
             }
+            $meta = $codebase->getDeclaringMethod($className, $methodName);
 
-            return $codebase->getDeclaringMethod($className, $methodName);
+            return $meta !== null
+                ? ['status' => 'resolved', 'meta' => $meta]
+                : ['status' => 'unresolved', 'meta' => null];
         }
 
         if ($call->kind === NodeKind::Instantiation) {
-            $classNode = self::unwrap($source, $source->getChildren($call)[0] ?? null);
+            $classNode = self::instantiationClassNode($source, $call);
             if ($classNode === null) {
-                return null;
+                return ['status' => 'unresolved', 'meta' => null];
             }
-            $className = ltrim($source->getResolvedName($classNode)?->name ?? $source->getText($classNode), '\\');
-            if ($className === '' || $className[0] === '$') {
-                return null;
+            $className = self::resolveStaticClassName($source, $classNode, $state, $codebase);
+            if ($className === null) {
+                return ['status' => 'unresolved', 'meta' => null];
+            }
+            $meta = $codebase->getDeclaringMethod($className, '__construct');
+            if ($meta !== null) {
+                return ['status' => 'resolved', 'meta' => $meta];
+            }
+            if ($codebase->classOrInterfaceExists($className)) {
+                return ['status' => 'known_by_value', 'meta' => null];
             }
 
-            return $codebase->getDeclaringMethod($className, '__construct');
+            return ['status' => 'unresolved', 'meta' => null];
+        }
+
+        return ['status' => 'unresolved', 'meta' => null];
+    }
+
+    /**
+     * @param ResolverState $state
+     */
+    private static function resolveMethodCallMetadata(
+        SourceFile $source,
+        Node $call,
+        array $state,
+        ?Codebase $codebase,
+    ): ?FunctionLikeMetadata {
+        if ($codebase === null) {
+            return null;
+        }
+
+        $methodName = self::calledMethodName($source, $call);
+        if ($methodName === null) {
+            return null;
+        }
+
+        $receiver = self::unwrap($source, $source->getChildren($call)[0] ?? null);
+        if ($receiver === null) {
+            return null;
+        }
+
+        $receiverClass = null;
+        if ($receiver->kind === NodeKind::DirectVariable) {
+            $varName = $source->getText($receiver);
+            $receiverClass = $state['varClasses'][$varName] ?? null;
+        } elseif ($receiver->kind === NodeKind::Instantiation) {
+            $classNode = self::instantiationClassNode($source, $receiver);
+            if ($classNode !== null) {
+                $receiverClass = self::resolveStaticClassName($source, $classNode, $state, $codebase);
+            }
+        }
+
+        if ($receiverClass === null || $receiverClass === '') {
+            return null;
+        }
+
+        return $codebase->getDeclaringMethod($receiverClass, $methodName);
+    }
+
+    private static function isFrameworkSafeThisMethod(FunctionLikeMetadata $meta): bool
+    {
+        $declaringClass = strtolower(ltrim($meta->identifier->class ?? '', '\\'));
+        if ($declaringClass === '') {
+            return false;
+        }
+
+        return $declaringClass === 'phpunit\\framework\\assert'
+            || $declaringClass === 'phpunit\\framework\\testcase'
+            || str_starts_with($declaringClass, 'phpunit\\framework\\')
+            || $declaringClass === 'mockery'
+            || str_starts_with($declaringClass, 'mockery\\');
+    }
+
+    private static function instantiationClassNode(SourceFile $source, Node $instantiation): ?Node
+    {
+        foreach ($source->getChildren($instantiation) as $child) {
+            if ($child->kind === NodeKind::Keyword || $child->kind === NodeKind::ArgumentList) {
+                continue;
+            }
+
+            return self::unwrap($source, $child);
         }
 
         return null;
+    }
+
+    /**
+     * @param ResolverState $state
+     */
+    private static function resolveStaticClassName(
+        SourceFile $source,
+        Node $classNode,
+        array $state,
+        ?Codebase $codebase,
+    ): ?string {
+        $raw = ltrim(trim($source->getText($classNode)), '\\');
+        if ($raw === '' || $raw[0] === '$') {
+            return null;
+        }
+
+        $lower = strtolower($raw);
+        if ($lower === 'self' || $lower === 'static') {
+            return $state['varClasses']['$this'] ?? null;
+        }
+        if ($lower === 'parent') {
+            $enclosing = $state['varClasses']['$this'] ?? null;
+
+            return ($enclosing !== null && $codebase !== null)
+                ? $codebase->getClassLike($enclosing)?->directParentClass
+                : null;
+        }
+
+        $resolved = $source->getResolvedName($classNode)?->name;
+        if (($resolved === null || $resolved === '') && $classNode->kind === NodeKind::Identifier) {
+            $firstChild = $source->getChildren($classNode)[0] ?? null;
+            if ($firstChild !== null) {
+                $resolved = $source->getResolvedName($firstChild)?->name;
+            }
+        }
+
+        return ltrim($resolved !== null && $resolved !== '' ? $resolved : $raw, '\\');
+    }
+
+    /**
+     * @return array<string, string>
+     */
+    private static function seedScopeVarClasses(SourceFile $source, Node $scope): array
+    {
+        $varClasses = [];
+        $enclosingClass = self::enclosingClassName($source, $scope);
+        if ($enclosingClass !== null) {
+            $varClasses['$this'] = $enclosingClass;
+        }
+
+        $paramList = self::firstChildOfKind($source, $scope, NodeKind::FunctionLikeParameterList);
+        if ($paramList === null) {
+            return $varClasses;
+        }
+
+        foreach ($source->getChildren($paramList) as $param) {
+            if ($param->kind !== NodeKind::FunctionLikeParameter) {
+                continue;
+            }
+            $varNode = self::firstChildOfKind($source, $param, NodeKind::DirectVariable);
+            if ($varNode === null) {
+                continue;
+            }
+            $typeClass = null;
+            foreach ($source->getChildren($param) as $child) {
+                if ($child === $varNode) {
+                    break;
+                }
+                if (
+                    $child->kind === NodeKind::Hint
+                    || $child->kind === NodeKind::NullableHint
+                    || $child->kind === NodeKind::ParenthesizedHint
+                    || $child->kind === NodeKind::Identifier
+                    || $child->kind === NodeKind::LocalIdentifier
+                    || $child->kind === NodeKind::QualifiedIdentifier
+                    || $child->kind === NodeKind::FullyQualifiedIdentifier
+                ) {
+                    $typeClass = self::extractSimpleHintClassName($source, $child, $enclosingClass);
+                    if ($typeClass !== null) {
+                        break;
+                    }
+                }
+            }
+            if ($typeClass !== null) {
+                $varClasses[$source->getText($varNode)] = $typeClass;
+            }
+        }
+
+        return $varClasses;
+    }
+
+    private static function extractSimpleHintClassName(SourceFile $source, Node $hintNode, ?string $enclosingClass): ?string
+    {
+        $resolved = $source->getResolvedName($hintNode)?->name;
+        $current = $hintNode;
+        while (
+            $current !== null
+            && (
+                $current->kind === NodeKind::Hint
+                || $current->kind === NodeKind::NullableHint
+                || $current->kind === NodeKind::ParenthesizedHint
+                || $current->kind === NodeKind::Identifier
+            )
+        ) {
+            $resolved ??= $source->getResolvedName($current)?->name;
+            $children = $source->getChildren($current);
+            if ($children === []) {
+                break;
+            }
+            $current = $children[0];
+        }
+        $ident = self::unwrap($source, $current);
+        if (
+            $ident === null
+            || (
+                $ident->kind !== NodeKind::Identifier
+                && $ident->kind !== NodeKind::LocalIdentifier
+                && $ident->kind !== NodeKind::QualifiedIdentifier
+                && $ident->kind !== NodeKind::FullyQualifiedIdentifier
+            )
+        ) {
+            return null;
+        }
+
+        $raw = ltrim(trim($source->getText($ident)), '\\');
+        $lower = strtolower($raw);
+        if (in_array($lower, ['string', 'int', 'float', 'bool', 'array', 'object', 'mixed', 'callable', 'iterable', 'null', 'false', 'true', 'void', 'never'], true)) {
+            return null;
+        }
+        if ($lower === 'self' || $lower === 'static') {
+            return $enclosingClass;
+        }
+
+        $resolved ??= $source->getResolvedName($ident)?->name;
+
+        return ltrim($resolved !== null && $resolved !== '' ? $resolved : $raw, '\\');
+    }
+
+    /**
+     * @param ResolverState $state
+     */
+    private static function inferRhsClassName(SourceFile $source, Node $rhsNode, array $state): ?string
+    {
+        $rhs = self::unwrap($source, $rhsNode);
+        if ($rhs === null) {
+            return null;
+        }
+
+        if ($rhs->kind === NodeKind::DirectVariable) {
+            return $state['varClasses'][$source->getText($rhs)] ?? null;
+        }
+
+        if ($rhs->kind === NodeKind::Instantiation) {
+            $classNode = self::instantiationClassNode($source, $rhs);
+            if ($classNode !== null) {
+                return self::resolveStaticClassName($source, $classNode, $state, null);
+            }
+        }
+
+        return null;
+    }
+
+    private static function enclosingClassName(SourceFile $source, Node $node): ?string
+    {
+        $current = $node;
+        while ($current !== null) {
+            if ($current->kind === NodeKind::Class_ || $current->kind === NodeKind::Trait) {
+                $resolved = $source->getResolvedName($current)?->name;
+                if ($resolved !== null && $resolved !== '') {
+                    return ltrim($resolved, '\\');
+                }
+                foreach ($source->getChildren($current) as $child) {
+                    if ($child->kind === NodeKind::LocalIdentifier) {
+                        $childResolved = $source->getResolvedName($child)?->name;
+                        if ($childResolved !== null && $childResolved !== '') {
+                            return ltrim($childResolved, '\\');
+                        }
+                        $short = trim($source->getText($child));
+                        if ($short === '') {
+                            return null;
+                        }
+                        $ns = self::enclosingNamespaceName($source, $current);
+
+                        return $ns !== '' ? $ns . '\\' . $short : $short;
+                    }
+                }
+
+                return null;
+            }
+            if ($current->kind === NodeKind::AnonymousClass) {
+                return null;
+            }
+            $current = $source->getParent($current);
+        }
+
+        return null;
+    }
+
+    private static function enclosingNamespaceName(SourceFile $source, Node $node): string
+    {
+        $current = $source->getParent($node);
+        while ($current !== null) {
+            if ($current->kind->value === 'Namespace') {
+                foreach ($source->getChildren($current) as $child) {
+                    $ident = self::unwrap($source, $child);
+                    if (
+                        $ident !== null
+                        && (
+                            $ident->kind === NodeKind::LocalIdentifier
+                            || $ident->kind === NodeKind::QualifiedIdentifier
+                            || $ident->kind === NodeKind::FullyQualifiedIdentifier
+                        )
+                    ) {
+                        return ltrim(trim($source->getText($ident)), '\\');
+                    }
+                }
+
+                return '';
+            }
+            $current = $source->getParent($current);
+        }
+
+        return '';
     }
 
     private static function parameterMayBeByRef(FunctionLikeMetadata $meta, int $posIdx, ?string $namedArg, bool $afterUnpack): bool
@@ -1298,7 +1749,7 @@ final class StrictAllowanceResolver
         }
 
         if ($live === []) {
-            return ['vars' => [], 'allowed' => [], 'refs' => [], 'thisAliases' => [], 'terminated' => true];
+            return ['vars' => [], 'allowed' => [], 'refs' => [], 'thisAliases' => [], 'varClasses' => [], 'escapedVars' => [], 'terminated' => true];
         }
 
         if (count($live) === 1) {
@@ -1345,6 +1796,7 @@ final class StrictAllowanceResolver
 
         $joinedRefs = [];
         $joinedThisAliases = [];
+        $joinedEscapedVars = [];
         foreach ($live as $branch) {
             foreach ($branch['refs'] as $from => $targets) {
                 foreach ($targets as $to => $_) {
@@ -1354,6 +1806,23 @@ final class StrictAllowanceResolver
             foreach ($branch['thisAliases'] as $alias => $_) {
                 $joinedThisAliases[$alias] = true;
             }
+            foreach ($branch['escapedVars'] as $escaped => $_) {
+                $joinedEscapedVars[$escaped] = true;
+            }
+        }
+
+        $joinedVarClasses = [];
+        foreach ($live[0]['varClasses'] as $varName => $className) {
+            $sameClass = true;
+            for ($i = 1, $total = count($live); $i < $total; ++$i) {
+                if (($live[$i]['varClasses'][$varName] ?? null) !== $className) {
+                    $sameClass = false;
+                    break;
+                }
+            }
+            if ($sameClass) {
+                $joinedVarClasses[$varName] = $className;
+            }
         }
 
         return [
@@ -1361,6 +1830,8 @@ final class StrictAllowanceResolver
             'allowed' => $joinedAllowed,
             'refs' => $joinedRefs,
             'thisAliases' => $joinedThisAliases,
+            'varClasses' => $joinedVarClasses,
+            'escapedVars' => $joinedEscapedVars,
             'terminated' => false,
         ];
     }

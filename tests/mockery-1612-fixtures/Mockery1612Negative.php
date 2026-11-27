@@ -21,5 +21,10 @@ final class Mockery1612Negative
         $mock->shouldAllowMockingProtectedMethods()->missingAfterProtected();
         $mock->shouldAllowMockingMethod('dynamicMethod')->missingAfterAllowMethod();
         $mock->shouldDeferMissing()->missingAfterDefer();
+
+        Mockery::mock(123);
+        Mockery::spy(false);
+        Mockery::namedMock();
+        namedMock();
     }
 }

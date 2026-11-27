@@ -23,7 +23,6 @@ use Mago\Sdk\Syntax\Node;
 use Mago\Sdk\Syntax\NodeKind;
 use Mago\Sdk\Syntax\SourceFile;
 
-use function array_unique;
 use function array_values;
 use function count;
 use function explode;
@@ -163,7 +162,8 @@ final class StrictMockedMethodHook implements MethodCallAnalysisHook
         }
 
         $toInspect = $this->mode === self::MODE_VARIADIC ? $argumentTypes : [$argumentTypes[0]];
-        $names = [];
+        /** @var array<string, string> $namesByLower */
+        $namesByLower = [];
         foreach ($toInspect as $type) {
             if ($type === null) {
                 continue;
@@ -174,7 +174,7 @@ final class StrictMockedMethodHook implements MethodCallAnalysisHook
                 foreach ($literals as $literal) {
                     $first = explode('->', $literal, 2)[0];
                     if ($first !== '') {
-                        $names[] = $first;
+                        $namesByLower[strtolower($first)] ??= $first;
                     }
                 }
 
@@ -191,14 +191,14 @@ final class StrictMockedMethodHook implements MethodCallAnalysisHook
                     if ($item->key->kind === ArrayKeyKind::String && is_string($item->key->value)) {
                         $first = explode('->', $item->key->value, 2)[0];
                         if ($first !== '') {
-                            $names[] = $first;
+                            $namesByLower[strtolower($first)] ??= $first;
                         }
                     }
                 }
             }
         }
 
-        return array_values(array_unique($names));
+        return array_values($namesByLower);
     }
 
     /**

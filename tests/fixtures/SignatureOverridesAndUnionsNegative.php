@@ -17,4 +17,15 @@ final class SignatureOverridesAndUnionsNegative extends Support
         $mock->shouldReceive('greet')->shouldReceive(['countGreetings']);
         $mock->shouldReceive('greet')->shouldNotReceive(['countGreetings']);
     }
+
+    public function invalidFactoryArguments(): void
+    {
+        Mockery::mock(123);
+        Mockery::spy(false);
+        Mockery::getContainer()->mock(null);
+        mock(123);
+        spy(false);
+        Mockery::namedMock();
+        namedMock();
+    }
 }

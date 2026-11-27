@@ -20,6 +20,12 @@ use Mago\Sdk\Analyzer\Type\CallableParameter;
  */
 final class MockHelperFunctionReturnTypeProvider implements FunctionReturnTypeProvider, CallableSignatureOverride
 {
+    private const HELPER_DISPLAY_NAMES = [
+        'mock' => 'mock',
+        'spy' => 'spy',
+        'namedmock' => 'namedMock',
+    ];
+
     public function getTargets(): array
     {
         return [
@@ -29,20 +35,21 @@ final class MockHelperFunctionReturnTypeProvider implements FunctionReturnTypePr
         ];
     }
 
-    private const HELPER_DISPLAY_NAMES = [
-        'mock' => 'mock',
-        'spy' => 'spy',
-        'namedmock' => 'namedMock',
-    ];
-
     public function getCallableSignature(CallableSignatureProviderContext $context): ?EffectiveCallableSignature
     {
         $lower = strtolower($context->invocation->name);
+        $argType = MockFactoryReturnTypeProvider::factoryArgumentType();
+        $parameters = $lower === 'namedmock'
+            ? [
+                new CallableParameter(name: '$name', type: Type::string()),
+                new CallableParameter(name: '$args', type: $argType, variadic: true),
+            ]
+            : [
+                new CallableParameter(name: '$args', type: $argType, variadic: true),
+            ];
 
         return new EffectiveCallableSignature(
-            parameters: [
-                new CallableParameter(name: '$args', type: Type::mixed(), variadic: true),
-            ],
+            parameters: $parameters,
             allowsNamedArguments: true,
             displayName: self::HELPER_DISPLAY_NAMES[$lower] ?? $context->invocation->name,
         );

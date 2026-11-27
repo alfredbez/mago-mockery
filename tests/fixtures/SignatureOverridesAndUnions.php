@@ -58,6 +58,17 @@ final class SignatureOverridesAndUnions extends Support
         $staticNamed = Mockery::namedMock('StaticFactoryAlias', Greeter::class);
         $staticNamed->greet('static-named');
 
+        $anonStatic = Mockery::mock();
+        $anonStatic->shouldReceive('anything');
+
+        $anonGlobal = mock();
+        $anonGlobal->shouldReceive('anything');
+
+        $withClosure = Mockery::mock(Greeter::class, static function (MockInterface $configured): void {
+            $configured->shouldReceive('greet')->andReturn('hi');
+        });
+        $withClosure->greet('closure-config');
+
         $mock->makePartial()
             ->byDefault()
             ->shouldAllowMockingProtectedMethods()

@@ -52,6 +52,24 @@ class RuntimeCtorInvoker
     }
 }
 
+class RuntimePartialCtorInvoker
+{
+    /** @var ?Closure(): void */
+    public static ?Closure $onConstruct = null;
+
+    public function __construct()
+    {
+        if (self::$onConstruct !== null) {
+            (self::$onConstruct)();
+        }
+    }
+
+    public function ping(): string
+    {
+        return 'pong';
+    }
+}
+
 class RuntimePureBase
 {
     /** @pure */
@@ -551,5 +569,33 @@ final class TraitConstantProvenanceRuntimeTest extends TestCase
         $this->expectException(Error::class);
         $this->expectExceptionMessage('Cannot access trait constant');
         $run(1);
+    }
+
+    public function testPartialMockSpecConstructorReentryOverwritesStaticLocalAndThrows(): void
+    {
+        $run = null;
+        $run = static function (bool $reset) use (&$run): string {
+            static $mock;
+            if ($reset) {
+                $mock = ProvenanceRuntimeTrait::class;
+
+                return 'reset';
+            }
+            RuntimePartialCtorInvoker::$onConstruct = static function () use (&$run): void {
+                $run(true);
+            };
+            $mock = Mockery::mock(ProvenanceRuntimeTrait::class);
+            Mockery::mock(RuntimePartialCtorInvoker::class . '[ping]');
+
+            return $mock::TAG;
+        };
+
+        try {
+            $this->expectException(Error::class);
+            $this->expectExceptionMessage('Cannot access trait constant');
+            $run(false);
+        } finally {
+            RuntimePartialCtorInvoker::$onConstruct = null;
+        }
     }
 }

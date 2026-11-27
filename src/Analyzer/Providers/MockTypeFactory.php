@@ -266,7 +266,7 @@ final class MockTypeFactory
                         $unionTypes[] = self::createMultiple(array_values($setClasses));
                     }
 
-                    return Type::union(...$unionTypes, ...[Type::null()]);
+                    return Type::union(...[...$unionTypes, Type::null()]);
                 }
             }
         } else {

@@ -25,6 +25,13 @@ use Mago\Sdk\Analyzer\Type\CallableParameter;
  */
 final class MockFactoryReturnTypeProvider implements MethodReturnTypeProvider, CallableSignatureOverride
 {
+    private const FACTORY_DISPLAY_NAMES = [
+        'mock' => 'mock',
+        'spy' => 'spy',
+        'namedmock' => 'namedMock',
+        'instancemock' => 'instanceMock',
+    ];
+
     public function __construct(
         private readonly ?NamedMockIndex $namedMocks = null,
     ) {}
@@ -42,13 +49,6 @@ final class MockFactoryReturnTypeProvider implements MethodReturnTypeProvider, C
         ];
     }
 
-    private const FACTORY_DISPLAY_NAMES = [
-        'mock' => 'mock',
-        'spy' => 'spy',
-        'namedmock' => 'namedMock',
-        'instancemock' => 'instanceMock',
-    ];
-
     public function getCallableSignature(CallableSignatureProviderContext $context): ?EffectiveCallableSignature
     {
         $lower = strtolower($context->invocation->name);
@@ -56,10 +56,18 @@ final class MockFactoryReturnTypeProvider implements MethodReturnTypeProvider, C
             return null;
         }
 
+        $argType = self::factoryArgumentType();
+        $parameters = $lower === 'namedmock'
+            ? [
+                new CallableParameter(name: '$name', type: Type::string()),
+                new CallableParameter(name: '$args', type: $argType, variadic: true),
+            ]
+            : [
+                new CallableParameter(name: '$args', type: $argType, variadic: true),
+            ];
+
         return new EffectiveCallableSignature(
-            parameters: [
-                new CallableParameter(name: '$args', type: Type::mixed(), variadic: true),
-            ],
+            parameters: $parameters,
             allowsNamedArguments: true,
             displayName: ($context->invocation->declaringClass ?? 'Mockery') . '::' . self::FACTORY_DISPLAY_NAMES[$lower],
         );
@@ -72,5 +80,14 @@ final class MockFactoryReturnTypeProvider implements MethodReturnTypeProvider, C
         }
 
         return MockTypeFactory::fromInvocation($context->invocation, $context->codebase);
+    }
+
+    public static function factoryArgumentType(): Type
+    {
+        return Type::union(
+            Type::string(),
+            Type::object(),
+            Type::array(Type::union(Type::int(), Type::string()), Type::mixed()),
+        );
     }
 }

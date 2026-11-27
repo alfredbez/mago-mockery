@@ -3,7 +3,7 @@ php-version = "8.3"
 
 [source]
 paths = ["tests/strict-fixtures"]
-includes = ["vendor/mockery/mockery/library"]
+includes = ["vendor/mockery/mockery/library", "vendor/phpunit/phpunit/src"]
 
 [analyzer]
 find-unused-definitions = false

@@ -444,4 +444,30 @@ final class TraitConstantProvenanceNegative
         $mock->shouldReceive('logTraitMessage')->andReturnUsing($cb);
         $mock::TAG;
     }
+
+    public function staticLocalPartialMockSpecConstructorReentry(bool $reset): void
+    {
+        static $mock;
+        if ($reset) {
+            $mock = LoggableTrait::class;
+
+            return;
+        }
+        $mock = Mockery::mock(LoggableTrait::class);
+        Mockery::mock(CtorInvoker::class . '[ping]');
+        $mock::TAG;
+    }
+
+    public function staticLocalPartialSpySpecConstructorReentry(bool $reset): void
+    {
+        static $mock;
+        if ($reset) {
+            $mock = LoggableTrait::class;
+
+            return;
+        }
+        $mock = Mockery::mock(LoggableTrait::class);
+        Mockery::spy(CtorInvoker::class . '[ping]');
+        $mock::TAG;
+    }
 }

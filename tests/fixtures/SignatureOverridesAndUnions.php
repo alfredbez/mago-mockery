@@ -76,4 +76,14 @@ final class SignatureOverridesAndUnions extends Support
             ->shouldDeferMissing()
             ->greet('fluent');
     }
+
+    /**
+     * @template T of object
+     * @param class-string<T> $className
+     * @return T&MockInterface
+     */
+    public function genericClassStringFactory(string $className): MockInterface
+    {
+        return Mockery::mock($className);
+    }
 }

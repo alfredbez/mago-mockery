@@ -11,6 +11,7 @@ use Mago\Sdk\Analyzer\Metadata\MemberIdentifier;
 use Mago\Sdk\Analyzer\Type;
 use Mago\Sdk\Analyzer\Type\ClassLikeStringType;
 use Mago\Sdk\Analyzer\Type\ClassLikeStringVariant;
+use Mago\Sdk\Analyzer\Type\GenericParameterType;
 use Mago\Sdk\Analyzer\Type\NamedObjectType;
 use Mago\Sdk\Analyzer\Type\ScalarType;
 use Mago\Sdk\Analyzer\Type\ScalarTypeKind;
@@ -53,6 +54,7 @@ final class MockTypeFactory
     {
         $startIndex = strtolower($invocation->name) === 'namedmock' ? 1 : 0;
         $classes = [];
+        $genericTarget = null;
         foreach ($invocation->arguments as $index => $argument) {
             if ($index < $startIndex || $argument->type === null) {
                 continue;
@@ -71,12 +73,20 @@ final class MockTypeFactory
                 self::addTargetIfValid($candidate, $codebase, $classes);
             }
 
+            if ($genericTarget === null) {
+                $genericTarget = self::extractGenericClassStringTarget($argument->type);
+            }
+
             foreach (self::extractObjectTargets($argument->type) as $candidate) {
                 self::addTargetIfValid($candidate, $codebase, $classes);
             }
         }
 
         if ($classes === []) {
+            if ($genericTarget !== null) {
+                return self::createForGenericTarget($genericTarget);
+            }
+
             return null;
         }
 
@@ -182,6 +192,54 @@ final class MockTypeFactory
         }
 
         return $targets;
+    }
+
+    private static function extractGenericClassStringTarget(Type $type): ?GenericParameterType
+    {
+        if (count($type->atomicTypes) !== 1) {
+            return null;
+        }
+
+        $atomic = $type->atomicTypes[0];
+        if (
+            !$atomic instanceof ScalarType
+            || $atomic->kind !== ScalarTypeKind::ClassLikeString
+            || !$atomic->refinement instanceof ClassLikeStringType
+        ) {
+            return null;
+        }
+
+        $refinement = $atomic->refinement;
+        if (
+            $refinement->variant !== ClassLikeStringVariant::Generic
+            || $refinement->parameterName === null
+            || $refinement->definingEntity === null
+            || $refinement->constraint === null
+        ) {
+            return null;
+        }
+
+        return new GenericParameterType(
+            name: $refinement->parameterName,
+            constraint: Type::fromAtomic($refinement->constraint),
+            definingEntity: $refinement->definingEntity,
+            intersections: null,
+        );
+    }
+
+    private static function createForGenericTarget(GenericParameterType $target): Type
+    {
+        $intersections = $target->intersections ?? [];
+        $intersections[] = new NamedObjectType(self::MOCK_INTERFACE, null, null, false, false, null, false);
+
+        return Type::fromAtomic(
+            new GenericParameterType(
+                name: $target->name,
+                constraint: $target->constraint,
+                definingEntity: $target->definingEntity,
+                intersections: $intersections,
+            ),
+        );
     }
 
     /**

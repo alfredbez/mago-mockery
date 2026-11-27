@@ -196,6 +196,7 @@ $expected = [
         ],
         'tests/fixtures/SignatureOverridesAndUnions.php' => [
             'deprecated-method' => 1,
+            'invalid-return-statement' => 1,
             'non-documented-method' => 8,
             'non-existent-method' => 9,
             'redundant-condition' => 1,

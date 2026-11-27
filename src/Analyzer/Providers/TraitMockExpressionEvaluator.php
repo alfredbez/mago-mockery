@@ -48,6 +48,38 @@ final class TraitMockExpressionEvaluator
         'shoulddefermissing' => true, 'shouldhavereceived' => true, 'shouldignoremissing' => true,
         'shouldnothavereceived' => true, 'shouldnotreceive' => true, 'shouldreceive' => true,
     ];
+    private const NON_REENTRANT_MOCKERY_METHODS = [
+        'allows' => true, 'andanyotherargs' => true, 'andanyothers' => true, 'andreturn' => true,
+        'andreturnarg' => true, 'andreturnnull' => true, 'andreturnself' => true, 'andreturnusing' => true,
+        'andreturnvalues' => true, 'andset' => true, 'andthrow' => true, 'any' => true, 'anyof' => true,
+        'asundefined' => true, 'atleast' => true, 'atmost' => true, 'between' => true, 'bydefault' => true,
+        'contains' => true, 'ducktype' => true, 'expects' => true, 'fetchmock' => true,
+        'getcontainer' => true, 'getmock' => true, 'globally' => true, 'haskey' => true, 'hasvalue' => true,
+        'instancemock' => true, 'makepartial' => true, 'mock' => true, 'mustbe' => true, 'namedmock' => true,
+        'never' => true, 'not' => true, 'once' => true, 'ordered' => true, 'passthru' => true,
+        'pattern' => true, 'shouldallowmockingmethod' => true, 'shouldallowmockingprotectedmethods' => true,
+        'shoulddefermissing' => true, 'shouldhavereceived' => true, 'shouldignoremissing' => true,
+        'shouldnotreceive' => true, 'shouldreceive' => true, 'spy' => true, 'subset' => true,
+        'times' => true, 'twice' => true, 'type' => true, 'with' => true, 'withanyargs' => true,
+        'withargs' => true, 'withnoargs' => true, 'zeroormoretimes' => true,
+    ];
+    private const NON_REENTRANT_MOCK_OBJECT_METHODS = [
+        'allows' => true, 'asundefined' => true, 'bydefault' => true, 'expects' => true, 'makepartial' => true,
+        'shouldallowmockingmethod' => true, 'shouldallowmockingprotectedmethods' => true,
+        'shoulddefermissing' => true, 'shouldhavereceived' => true, 'shouldignoremissing' => true,
+        'shouldnotreceive' => true, 'shouldreceive' => true,
+    ];
+    private const EXPECTATION_FACTORY_METHODS = [
+        'allows' => true, 'expects' => true, 'shouldnotreceive' => true, 'shouldreceive' => true,
+    ];
+    private const NON_REENTRANT_EXPECTATION_METHODS = [
+        'andreturn' => true, 'andreturnarg' => true, 'andreturnnull' => true, 'andreturns' => true,
+        'andreturnself' => true, 'andset' => true, 'atleast' => true, 'atmost' => true, 'between' => true,
+        'bydefault' => true, 'getmock' => true, 'globally' => true, 'mock' => true, 'never' => true,
+        'once' => true, 'ordered' => true, 'passthru' => true, 'set' => true, 'shouldnotreceive' => true,
+        'shouldreceive' => true, 'times' => true, 'twice' => true, 'with' => true, 'withanyargs' => true,
+        'withnoargs' => true, 'zeroormoretimes' => true,
+    ];
     private const FACTORY_METHODS = ['mock' => true, 'spy' => true, 'namedmock' => true, 'instancemock' => true];
     private const HELPER_FUNCTIONS = ['mock' => true, 'spy' => true, 'namedmock' => true];
     private const FLUENT_PRESERVING_METHODS = [
@@ -845,7 +877,7 @@ final class TraitMockExpressionEvaluator
                     $meta = (!$safe && $this->hasBareVariableArgument($i + 1, $this->syntax->closeOf($i)))
                         ? $this->codebase?->getDeclaringMethod($resolved, '__construct')
                         : null;
-                    $i = $this->evalCallAtParen($i, $trial, $stopAtTarget, $meta, $safe);
+                    $i = $this->evalCallAtParen($i, $trial, $stopAtTarget, $meta, $safe, $safe);
                 } else {
                     $trial->killEscapedCells();
                     $trial->killStaticLocalCells();
@@ -867,7 +899,7 @@ final class TraitMockExpressionEvaluator
             $meta = (!$safe && ($this->hasBareVariableArgument($i + 2, $argsClose) || ($trial->hasStaticLocalCells() && $this->areArgsPureLiterals($this->parseCallArguments($i + 2, $argsClose)))))
                 ? $this->resolveFunctionMetadata($tok)
                 : null;
-            $i = $this->evalCallAtParen($i + 1, $trial, $stopAtTarget, $meta, $safe);
+            $i = $this->evalCallAtParen($i + 1, $trial, $stopAtTarget, $meta, $safe, $safe);
             if (!$this->reachedTarget) {
                 if ($globalCandidate === 'extract') {
                     $trial->killAll();
@@ -882,10 +914,11 @@ final class TraitMockExpressionEvaluator
                 $methodLower = strtolower($memberTok->text);
                 $isMockery = $className !== null && strtolower($className) === 'mockery';
                 $safe = $isMockery && isset(self::SAFE_MOCKERY_METHODS[$methodLower]);
+                $nonReentrant = $isMockery && isset(self::NON_REENTRANT_MOCKERY_METHODS[$methodLower]);
                 $meta = (!$safe && $className !== null && $this->hasBareVariableArgument($i + 4, $this->syntax->closeOf($i + 3)))
                     ? $this->codebase?->getDeclaringMethod($className, $memberTok->text)
                     : null;
-                $i = $this->evalCallAtParen($i + 3, $trial, $stopAtTarget, $meta, $safe);
+                $i = $this->evalCallAtParen($i + 3, $trial, $stopAtTarget, $meta, $safe, $nonReentrant);
                 if (!$this->reachedTarget && $isMockery) {
                     if (isset(self::FACTORY_METHODS[$methodLower])) {
                         $val = TraitMockAliasState::mockValue();
@@ -908,6 +941,7 @@ final class TraitMockExpressionEvaluator
 
         /** @var list<TraitMockAliasState> $nullsafeSnapshots */
         $nullsafeSnapshots = [];
+        $inExpectationChain = false;
 
         while ($i < $end) {
             $step = $tokens[$i];
@@ -927,14 +961,21 @@ final class TraitMockExpressionEvaluator
                 if ($i + 2 < $end && $tokens[$i + 2]->text === '(' && ($member->id === T_STRING || TraitMockTokenScope::isKeywordIdentifier($member))) {
                     $methodLower = strtolower($member->text);
                     $safe = ($val['container'] && isset(self::FACTORY_METHODS[$methodLower]))
-                        || ($val['mock'] && isset(self::SAFE_MOCK_OBJECT_METHODS[$methodLower]));
+                        || ($val['mock'] && isset(self::SAFE_MOCK_OBJECT_METHODS[$methodLower]))
+                        || ($inExpectationChain && isset(self::NON_REENTRANT_EXPECTATION_METHODS[$methodLower]));
+                    $nonReentrant = ($val['container'] && isset(self::FACTORY_METHODS[$methodLower]))
+                        || ($val['mock'] && isset(self::NON_REENTRANT_MOCK_OBJECT_METHODS[$methodLower]))
+                        || ($inExpectationChain && isset(self::NON_REENTRANT_EXPECTATION_METHODS[$methodLower]));
                     $meta = (!$safe && $baseIsThis && $this->enclosingClass !== null && $this->hasBareVariableArgument($i + 3, $this->syntax->closeOf($i + 2)))
                         ? $this->codebase?->getDeclaringMethod($this->enclosingClass, $member->text)
                         : null;
-                    $i = $this->evalCallAtParen($i + 2, $trial, $stopAtTarget, $meta, $safe);
+                    $i = $this->evalCallAtParen($i + 2, $trial, $stopAtTarget, $meta, $safe, $nonReentrant);
+                    $nextInExpectationChain = ($val['mock'] && isset(self::EXPECTATION_FACTORY_METHODS[$methodLower]))
+                        || ($inExpectationChain && isset(self::NON_REENTRANT_EXPECTATION_METHODS[$methodLower]) && $methodLower !== 'getmock' && $methodLower !== 'mock');
                     $val = (!$isNullsafe && (($val['container'] && isset(self::FACTORY_METHODS[$methodLower])) || ($val['mock'] && isset(self::FLUENT_PRESERVING_METHODS[$methodLower]))))
                         ? TraitMockAliasState::mockValue()
                         : TraitMockAliasState::unknownValue();
+                    $inExpectationChain = $nextInExpectationChain;
                 } elseif ($member->text === '{') {
                     $mClose = $this->syntax->closeOf($i + 1);
                     $this->evalExpr($i + 2, $mClose, $trial, $stopAtTarget);
@@ -944,11 +985,13 @@ final class TraitMockExpressionEvaluator
                     }
                     $i = $mClose + 1;
                     $val = TraitMockAliasState::unknownValue();
+                    $inExpectationChain = false;
                 } else {
                     $trial->killEscapedCells();
                     $trial->killStaticLocalCells();
                     $i += 2;
                     $val = TraitMockAliasState::unknownValue();
+                    $inExpectationChain = false;
                 }
                 $baseIsThis = false;
             } elseif ($step->text === '[') {
@@ -959,17 +1002,20 @@ final class TraitMockExpressionEvaluator
                     $trial->killStaticLocalCells();
                 }
                 $val = TraitMockAliasState::unknownValue();
+                $inExpectationChain = false;
                 $baseIsThis = false;
                 $i = $close + 1;
             } elseif ($step->text === '(') {
                 $i = $this->evalCallAtParen($i, $trial, $stopAtTarget, null, false);
                 $val = TraitMockAliasState::unknownValue();
+                $inExpectationChain = false;
                 $baseIsThis = false;
             } elseif ($step->id === T_DOUBLE_COLON && $i + 1 < $end) {
                 $i = ($i + 2 < $end && $tokens[$i + 2]->text === '(')
                     ? $this->evalCallAtParen($i + 2, $trial, $stopAtTarget, null, false)
                     : $i + 2;
                 $val = TraitMockAliasState::unknownValue();
+                $inExpectationChain = false;
                 $baseIsThis = false;
             } else {
                 return null;
@@ -999,6 +1045,7 @@ final class TraitMockExpressionEvaluator
         bool $stopAtTarget,
         ?FunctionLikeMetadata $calleeMeta,
         bool $knownSafeByValue,
+        bool $knownSafeNonReentrant = false,
     ): int {
         $close = $this->syntax->closeOf($openParen);
         $args = $this->parseCallArguments($openParen + 1, $close);
@@ -1015,7 +1062,9 @@ final class TraitMockExpressionEvaluator
         }
         $this->invalidateByRefArguments($args, $state, $calleeMeta, $knownSafeByValue);
         $state->killEscapedCells();
-        if (!$this->isNonReentrantCallee($calleeMeta, $args)) {
+        $isNonReentrant = ($knownSafeNonReentrant && $this->areArgsPureLiterals($args))
+            || $this->isNonReentrantCallee($calleeMeta, $args);
+        if (!$isNonReentrant) {
             $state->killStaticLocalCells();
         }
 
@@ -1076,6 +1125,15 @@ final class TraitMockExpressionEvaluator
 
             return ($tok->id === T_STRING && ($lower === 'true' || $lower === 'false' || $lower === 'null'))
                 || ($tok->id === T_NAME_FULLY_QUALIFIED && ($lower === '\\true' || $lower === '\\false' || $lower === '\\null'));
+        }
+
+        if (
+            $end - $start === 3
+            && (TraitMockTokenScope::isNameToken($tok) || $tok->id === T_STATIC)
+            && $tokens[$start + 1]->id === T_DOUBLE_COLON
+            && ($tokens[$start + 2]->id === T_CLASS || ($tokens[$start + 2]->id === T_STRING && strtolower($tokens[$start + 2]->text) === 'class'))
+        ) {
+            return true;
         }
 
         if ($tok->text === '+' || $tok->text === '-' || $tok->text === '!' || $tok->text === '~') {

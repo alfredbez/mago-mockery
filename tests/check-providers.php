@@ -728,6 +728,38 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
         $filterDecision('<?php use Mockery; function f($cb) { static $m; $m = Mockery::mock(T::class); for ($i = 0; $i < 2; ++$i) { $r = $m::TAG; mock(CtorInvoker::class, [$cb]); } return $r; }', '$m::TAG') === IssueFilterDecision::Keep,
         'Global mock helper inside loop must invalidate static-local cells.',
     );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { static $m; $m = Mockery::mock(T::class); $m->shouldReceive("foo")->andReturn("bar"); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Remove,
+        'Static-local mock must survive safe Mockery expectation setup with pure literal args.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { static $m; $m = Mockery::mock(T::class); Mockery::mock(Other::class); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Remove,
+        'Static-local mock must survive Mockery::mock() with pure class-const args.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f($cb) { static $m; $m = Mockery::mock(T::class); $m->shouldReceive("foo")->andReturnUsing($cb); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Static-local mock must invalidate when expectation setup receives a callback argument.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f() { static $m; $m = Mockery::mock(T::class); Mockery::close(); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Static-local mock must invalidate on Mockery::close().',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f(int $x) { $m = T::class; do { switch ($x) { case 1: break; } $m = Mockery::mock(T::class); } while (false); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Remove,
+        'Nested switch break inside do-while(false) must not disable post-loop mock dominance.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f(int $x) { $m = T::class; do { switch ($x) { case 1: break 2; } $m = Mockery::mock(T::class); } while (false); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Nested switch break 2 exiting outer do-while(false) must keep post-loop diagnostic.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f(bool $b) { $m = T::class; do { for ($i = 0; $i < 2; ++$i) { if ($b) { break; } } $m = Mockery::mock(T::class); } while (false); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Remove,
+        'Nested for break inside do-while(false) must not disable post-loop mock dominance.',
+    );
+    $check(
+        $filterDecision('<?php use Mockery; function f(bool $b) { $m = T::class; do { for ($i = 0; $i < 2; ++$i) { if ($b) { continue 2; } } $m = Mockery::mock(T::class); } while (false); return $m::TAG; }', '$m::TAG') === IssueFilterDecision::Keep,
+        'Nested for continue 2 targeting outer do-while(false) must keep post-loop diagnostic.',
+    );
 
     $factoryProvider = new MockFactoryReturnTypeProvider();
     $factorySig = $factoryProvider->getCallableSignature(new CallableSignatureProviderContext(

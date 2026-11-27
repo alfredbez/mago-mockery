@@ -68,7 +68,7 @@ $expected = [
         ],
         'tests/fixtures/TraitConstantProvenanceNegative.php' => [
             'deprecated-method' => 1,
-            'direct-trait-constant-access' => 44,
+            'direct-trait-constant-access' => 50,
             'redundant-null-coalesce' => 4,
         ],
         'tests/fixtures/Wave9FactoriesAndTraitsNegative.php' => [
@@ -140,16 +140,16 @@ $expected = [
             'impossible-assignment' => version_compare($versionMatch[1], '1.61.0', '>=') ? 1 : 4,
             'mixed-assignment' => 2,
             'mixed-return-statement' => 2,
-            'never-return' => version_compare($versionMatch[1], '1.61.0', '>=') ? 19 : 21,
-            'non-existent-class-constant' => 22,
+            'never-return' => version_compare($versionMatch[1], '1.61.0', '>=') ? 23 : 25,
+            'non-existent-class-constant' => 26,
             'non-existent-method' => 1,
             'redundant-null-coalesce' => 3,
         ],
         'tests/fixtures/TraitConstantProvenanceNegative.php' => [
             'deprecated-method' => 1,
-            'direct-trait-constant-access' => 20,
+            'direct-trait-constant-access' => 22,
             'mixed-assignment' => 1,
-            'non-existent-class-constant' => 23,
+            'non-existent-class-constant' => 27,
             'non-existent-method' => 1,
             'possibly-invalid-argument' => 1,
             'redundant-null-coalesce' => 4,
@@ -235,7 +235,7 @@ foreach ([
     ],
     'tests/fixtures/TraitConstantProvenanceNegative.php' => [
         'deprecated-method' => 1,
-        'direct-trait-constant-access' => 44,
+        'direct-trait-constant-access' => 50,
         'redundant-null-coalesce' => 4,
     ],
 ] as $fixtureFile => $expectedCounts) {
@@ -248,7 +248,7 @@ foreach ([
 
 foreach ([
     'tests/fixtures/TraitConstantDominanceAndAliasesNegative.php' => [34, 43, 54, 61, 69, 77, 85, 96, 103, 112, 119, 129, 136, 143, 150, 160, 170, 181, 191, 198],
-    'tests/fixtures/TraitConstantProvenanceNegative.php' => [74, 96, 105, 118, 128, 136, 144, 156, 163, 172, 185, 198, 205, 217, 223, 230, 236, 243, 250, 257, 264, 273, 280, 291, 307, 319, 335, 345, 353, 369, 385, 402],
+    'tests/fixtures/TraitConstantProvenanceNegative.php' => [74, 96, 105, 118, 128, 136, 144, 156, 163, 172, 185, 198, 205, 217, 223, 230, 236, 243, 250, 257, 264, 273, 280, 291, 307, 319, 335, 345, 353, 369, 385, 402, 415, 429, 437, 445],
 ] as $negativeFile => $expectedLines) {
     foreach ($expectedLines as $expectedLine) {
         $found = 0;

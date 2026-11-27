@@ -7,10 +7,14 @@ namespace AlfredBez\MagoMockery\Analyzer\Providers;
 use Mago\Sdk\Analyzer\Codebase;
 use PhpToken;
 
+use function bindec;
+use function hexdec;
 use function max;
+use function octdec;
 use function preg_match;
 use function str_replace;
 use function strtolower;
+use function substr;
 
 /**
  * @internal
@@ -944,7 +948,7 @@ final class TraitMockFlowAnalyzer
         return false;
     }
 
-    private function hasLoopControlJump(int $start, int $end): bool
+    private function hasLoopControlJump(int $start, int $end, int $depth = 0): bool
     {
         $tokens = $this->syntax->tokens;
         for ($i = $start; $i < $end; ++$i) {
@@ -980,12 +984,101 @@ final class TraitMockFlowAnalyzer
                 }
                 continue;
             }
-            if ($tok->id === T_BREAK || $tok->id === T_CONTINUE || $tok->id === T_GOTO) {
+            if (
+                ($tok->id === T_SWITCH || $tok->id === T_FOR || $tok->id === T_FOREACH || $tok->id === T_WHILE)
+                && !TraitMockTokenScope::isMemberAccess($tokens, $i)
+            ) {
+                $bodyStart = ($i + 1 < $end && $tokens[$i + 1]->text === '(')
+                    ? $this->syntax->closeOf($i + 1) + 1
+                    : $i + 1;
+                if ($bodyStart < $end && $tokens[$bodyStart]->text === ':') {
+                    $endTok = match ($tok->id) {
+                        T_FOR => T_ENDFOR,
+                        T_FOREACH => T_ENDFOREACH,
+                        T_WHILE => T_ENDWHILE,
+                        default => T_ENDSWITCH,
+                    };
+                    $bodyEnd = $this->syntax->findColonBlockEnd($bodyStart + 1, $end, [$endTok]);
+                    if ($this->hasLoopControlJump($bodyStart + 1, $bodyEnd, $depth + 1)) {
+                        return true;
+                    }
+                    $i = max($this->syntax->scanToStatementTerminator($bodyEnd + 1, $end) - 1, $i);
+                    continue;
+                }
+                if ($bodyStart < $end && $tokens[$bodyStart]->text === '{') {
+                    $bodyClose = $this->syntax->closeOf($bodyStart);
+                    if ($this->hasLoopControlJump($bodyStart + 1, $bodyClose, $depth + 1)) {
+                        return true;
+                    }
+                    $i = $bodyClose;
+                    continue;
+                }
+                if ($bodyStart < $end) {
+                    $bodyEnd = $this->syntax->findStatementEnd($bodyStart, $end);
+                    if ($this->hasLoopControlJump($bodyStart, $bodyEnd, $depth + 1)) {
+                        return true;
+                    }
+                    $i = max($bodyEnd - 1, $i);
+                    continue;
+                }
+            }
+            if ($tok->id === T_DO && !TraitMockTokenScope::isMemberAccess($tokens, $i)) {
+                $bodyStart = $i + 1;
+                $bodyEnd = $this->syntax->findStatementEnd($bodyStart, $end);
+                if ($this->hasLoopControlJump($bodyStart, $bodyEnd, $depth + 1)) {
+                    return true;
+                }
+                $afterDo = ($bodyEnd < $end && $tokens[$bodyEnd]->id === T_WHILE)
+                    ? $this->syntax->scanToStatementTerminator($bodyEnd + 1, $end)
+                    : $bodyEnd;
+                $i = max($afterDo - 1, $i);
+                continue;
+            }
+            if ($tok->id === T_GOTO && !TraitMockTokenScope::isMemberAccess($tokens, $i)) {
                 return true;
+            }
+            if (($tok->id === T_BREAK || $tok->id === T_CONTINUE) && !TraitMockTokenScope::isMemberAccess($tokens, $i)) {
+                $levels = $this->parseBreakContinueLevels($i, $end);
+                if ($levels === null || $levels > $depth) {
+                    return true;
+                }
             }
         }
 
         return false;
+    }
+
+    private function parseBreakContinueLevels(int $keywordIndex, int $end): ?int
+    {
+        $tokens = $this->syntax->tokens;
+        $next = $keywordIndex + 1;
+        if ($next >= $end || $tokens[$next]->text === ';' || $tokens[$next]->id === T_CLOSE_TAG) {
+            return 1;
+        }
+
+        if (
+            $tokens[$next]->id !== T_LNUMBER
+            || ($next + 1 < $end && $tokens[$next + 1]->text !== ';' && $tokens[$next + 1]->id !== T_CLOSE_TAG)
+        ) {
+            return null;
+        }
+
+        $raw = str_replace('_', '', $tokens[$next]->text);
+        if (preg_match('/^0[xX][0-9a-fA-F]+$/', $raw) === 1) {
+            $levels = (int) hexdec(substr($raw, 2));
+        } elseif (preg_match('/^0[bB][01]+$/', $raw) === 1) {
+            $levels = (int) bindec(substr($raw, 2));
+        } elseif (preg_match('/^0[oO][0-7]+$/', $raw) === 1) {
+            $levels = (int) octdec(substr($raw, 2));
+        } elseif (preg_match('/^0[0-7]+$/', $raw) === 1) {
+            $levels = (int) octdec($raw);
+        } elseif (preg_match('/^[0-9]+$/', $raw) === 1) {
+            $levels = (int) $raw;
+        } else {
+            return null;
+        }
+
+        return $levels >= 1 ? $levels : null;
     }
 
     private function killAssignmentLhsInScan(int $floor, int $assignIdx, TraitMockAliasState $state): void

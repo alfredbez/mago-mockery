@@ -401,4 +401,47 @@ final class TraitConstantProvenanceNegative
         $container->mock(CtorInvoker::class, [$cb]);
         $mock::TAG;
     }
+
+    public function doWhileFalseWithSwitchBreakTwoExitsOuterDo(int $x): void
+    {
+        $mock = LoggableTrait::class;
+        do {
+            switch ($x) {
+                case 1:
+                    break 2;
+            }
+            $mock = Mockery::mock(LoggableTrait::class);
+        } while (false);
+        $mock::TAG;
+    }
+
+    public function doWhileFalseWithForContinueTwoExitsOuterDo(bool $flag): void
+    {
+        $mock = LoggableTrait::class;
+        do {
+            for ($i = 0; $i < 2; ++$i) {
+                if ($flag) {
+                    continue 2;
+                }
+            }
+            $mock = Mockery::mock(LoggableTrait::class);
+        } while (false);
+        $mock::TAG;
+    }
+
+    public function staticLocalMockeryCloseInvalidation(): void
+    {
+        static $mock;
+        $mock = Mockery::mock(LoggableTrait::class);
+        Mockery::close();
+        $mock::TAG;
+    }
+
+    public function staticLocalShouldReceiveCallbackInvalidation(callable $cb): void
+    {
+        static $mock;
+        $mock = Mockery::mock(LoggableTrait::class);
+        $mock->shouldReceive('logTraitMessage')->andReturnUsing($cb);
+        $mock::TAG;
+    }
 }

@@ -495,4 +495,61 @@ final class TraitConstantProvenanceRuntimeTest extends TestCase
         $this->expectExceptionMessage('Cannot access trait constant');
         $run(false);
     }
+
+    public function testStaticLocalWithSafeShouldReceiveAndFactoryPreservesTraitConstantAccess(): void
+    {
+        $run = static function (): string {
+            static $mock;
+            $mock = Mockery::mock(ProvenanceRuntimeTrait::class);
+            $mock->shouldReceive('ping')->andReturn('pong');
+            Mockery::mock(\stdClass::class);
+
+            return $mock::TAG;
+        };
+
+        self::assertSame('tag', $run());
+    }
+
+    public function testDoWhileFalseWithNestedSwitchBreakDominatesTraitConstantAccess(): void
+    {
+        $run = static function (int $x): string {
+            $mock = ProvenanceRuntimeTrait::class;
+            do {
+                switch ($x) {
+                    case 1:
+                        break;
+                    default:
+                        break;
+                }
+                $mock = Mockery::mock(ProvenanceRuntimeTrait::class);
+            } while (false);
+
+            return $mock::TAG;
+        };
+
+        self::assertSame('tag', $run(1));
+        self::assertSame('tag', $run(2));
+    }
+
+    public function testDoWhileFalseWithNestedSwitchBreakTwoThrowsOnOuterExit(): void
+    {
+        $run = static function (int $x): string {
+            $mock = ProvenanceRuntimeTrait::class;
+            do {
+                switch ($x) {
+                    case 1:
+                        break 2;
+                }
+                $mock = Mockery::mock(ProvenanceRuntimeTrait::class);
+            } while (false);
+
+            return $mock::TAG;
+        };
+
+        self::assertSame('tag', $run(2));
+
+        $this->expectException(Error::class);
+        $this->expectExceptionMessage('Cannot access trait constant');
+        $run(1);
+    }
 }

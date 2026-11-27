@@ -238,4 +238,53 @@ final class TraitConstantProvenance
 
         return $resolved::TAG;
     }
+
+    public function staticLocalWithSafeShouldReceive(): string
+    {
+        static $mock;
+        $mock = Mockery::mock(LoggableTrait::class);
+        $mock->shouldReceive('logTraitMessage')->andReturn('ok');
+
+        return $mock::TAG;
+    }
+
+    public function staticLocalWithSafeMockeryFactory(): string
+    {
+        static $mock;
+        $mock = Mockery::mock(LoggableTrait::class);
+        Mockery::mock(Greeter::class);
+
+        return $mock::TAG;
+    }
+
+    public function doWhileFalseWithNestedSwitchBreak(int $x): string
+    {
+        $mock = LoggableTrait::class;
+        do {
+            switch ($x) {
+                case 1:
+                    break;
+                default:
+                    break;
+            }
+            $mock = Mockery::mock(LoggableTrait::class);
+        } while (false);
+
+        return $mock::TAG;
+    }
+
+    public function doWhileFalseWithNestedForBreak(bool $flag): string
+    {
+        $mock = LoggableTrait::class;
+        do {
+            for ($i = 0; $i < 2; ++$i) {
+                if ($flag) {
+                    break;
+                }
+            }
+            $mock = Mockery::mock(LoggableTrait::class);
+        } while (false);
+
+        return $mock::TAG;
+    }
 }

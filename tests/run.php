@@ -19,6 +19,7 @@ if (preg_match('/^mago (\d+\.\d+\.\d+)/', $version, $versionMatch) !== 1 || vers
     fwrite(STDERR, "The fixture expectations require Mago 1.60.2 or newer\n");
     exit(1);
 }
+$magoAtLeast161 = version_compare($versionMatch[1], '1.61.0', '>=');
 
 $validated = run([...$magoCommand, 'extension', 'validate']);
 fwrite(STDOUT, "extension validate (exit {$validated['exit']}):\n");
@@ -577,11 +578,16 @@ foreach ([
 
 $strictDefault = analyze(false, 'tests/strict-methods.toml');
 $strictEnabled = analyze(false, 'tests/strict-methods.toml', ['MAGO_MOCKERY_STRICT_METHODS' => '1']);
+$mago160UnpackRefIssues = $magoAtLeast161 ? [] : [
+    'invalid-assignment' => 1,
+    'invalid-destructuring-source' => 1,
+    'possibly-undefined-variable' => 1,
+];
 $failures += assertHistograms('strict default mode', $strictDefault, [
     'tests/strict-fixtures/StrictMethods.php' => [],
     'tests/strict-fixtures/Wave9StrictGaps.php' => [],
     'tests/strict-fixtures/Wave12Strict.php' => [],
-    'tests/strict-fixtures/StrictAllowancesAndUnions.php' => [],
+    'tests/strict-fixtures/StrictAllowancesAndUnions.php' => $mago160UnpackRefIssues,
 ]);
 $failures += assertHistograms('strict enabled mode', $strictEnabled, [
     'tests/strict-fixtures/StrictMethods.php' => [
@@ -595,6 +601,7 @@ $failures += assertHistograms('strict enabled mode', $strictEnabled, [
     ],
     'tests/strict-fixtures/StrictAllowancesAndUnions.php' => [
         'alfredbez/mockery/unknown-mocked-method' => 14,
+        ...$mago160UnpackRefIssues,
     ],
 ]);
 foreach ([

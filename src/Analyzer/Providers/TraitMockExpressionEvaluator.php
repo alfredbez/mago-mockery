@@ -1079,7 +1079,11 @@ final class TraitMockExpressionEvaluator
         $tokens = $this->syntax->tokens;
         foreach ($args as $arg) {
             for ($k = $arg['start']; $k < $arg['end']; ++$k) {
-                if ($tokens[$k]->id === T_CONSTANT_ENCAPSED_STRING && str_contains($tokens[$k]->text, '[')) {
+                if ($tokens[$k]->id !== T_CONSTANT_ENCAPSED_STRING) {
+                    continue;
+                }
+                $text = $tokens[$k]->text;
+                if (str_contains($text, '[') || ($text[0] === '"' && str_contains($text, '\\'))) {
                     return false;
                 }
             }

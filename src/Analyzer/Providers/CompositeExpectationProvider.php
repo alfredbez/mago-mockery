@@ -20,6 +20,8 @@ use Mago\Sdk\Analyzer\Type\ListType;
 use Mago\Sdk\Analyzer\Type\NamedObjectType;
 use Mago\Sdk\Analyzer\Type\ScalarType;
 use Mago\Sdk\Analyzer\Type\ScalarTypeKind;
+use Mago\Sdk\Analyzer\Type\SimpleAtomicType;
+use Mago\Sdk\Analyzer\Type\SimpleAtomicTypeKind;
 use Mago\Sdk\Analyzer\Type\Visibility;
 use WeakMap;
 
@@ -305,55 +307,80 @@ final class CompositeExpectationProvider implements MethodReturnTypeProvider, Ca
 
     private static function isNonEmptyArrayType(Type $type): bool
     {
-        foreach ($type->atomicTypes as $atomic) {
-            if ($atomic instanceof KeyedArrayType) {
-                if (!$atomic->nonEmpty) {
-                    return false;
-                }
+        $emptiness = self::classifyArrayEmptiness($type);
 
-                continue;
-            }
-
-            if ($atomic instanceof ListType) {
-                if (!$atomic->nonEmpty && ($atomic->knownCount === null || $atomic->knownCount === 0)) {
-                    return false;
-                }
-
-                continue;
-            }
-
-            return false;
-        }
-
-        return true;
+        return $emptiness !== null && !$emptiness['canBeEmpty'] && $emptiness['canBeNonEmpty'];
     }
 
     private static function isPossiblyEmptyArrayType(Type $type): bool
     {
-        if (self::isNonEmptyArrayType($type)) {
-            return false;
-        }
+        $emptiness = self::classifyArrayEmptiness($type);
+
+        return $emptiness !== null && $emptiness['canBeEmpty'] && $emptiness['canBeNonEmpty'];
+    }
+
+    /**
+     * @return array{canBeEmpty: bool, canBeNonEmpty: bool}|null
+     */
+    private static function classifyArrayEmptiness(Type $type): ?array
+    {
+        $canBeEmpty = false;
+        $canBeNonEmpty = false;
 
         foreach ($type->atomicTypes as $atomic) {
             if ($atomic instanceof ListType) {
-                if ($atomic->knownCount === 0) {
-                    return false;
+                if (
+                    !$atomic->nonEmpty
+                    && ($atomic->knownCount === 0 || ($atomic->knownElements === [] && self::isNeverType($atomic->elementType)))
+                ) {
+                    $canBeEmpty = true;
+                    continue;
                 }
 
+                if ($atomic->nonEmpty || ($atomic->knownCount !== null && $atomic->knownCount > 0)) {
+                    $canBeNonEmpty = true;
+                    continue;
+                }
+
+                $canBeEmpty = true;
+                $canBeNonEmpty = true;
                 continue;
             }
 
             if ($atomic instanceof KeyedArrayType) {
-                if ($atomic->keyType === null && ($atomic->knownItems === null || $atomic->knownItems === [])) {
-                    return false;
+                if (
+                    !$atomic->nonEmpty
+                    && $atomic->keyType === null
+                    && ($atomic->knownItems === null || $atomic->knownItems === [])
+                ) {
+                    $canBeEmpty = true;
+                    continue;
                 }
 
+                if ($atomic->nonEmpty) {
+                    $canBeNonEmpty = true;
+                    continue;
+                }
+
+                $canBeEmpty = true;
+                $canBeNonEmpty = true;
                 continue;
             }
 
+            return null;
+        }
+
+        return ['canBeEmpty' => $canBeEmpty, 'canBeNonEmpty' => $canBeNonEmpty];
+    }
+
+    private static function isNeverType(Type $type): bool
+    {
+        if (count($type->atomicTypes) !== 1) {
             return false;
         }
 
-        return true;
+        $atomic = $type->atomicTypes[0];
+
+        return $atomic instanceof SimpleAtomicType && $atomic->kind === SimpleAtomicTypeKind::Never;
     }
 }

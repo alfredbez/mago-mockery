@@ -2,9 +2,12 @@
 
 declare(strict_types=1);
 
-use AlfredBez\MagoMockery\Analyzer\Providers\HigherOrderMessageProvider;
-use AlfredBez\MagoMockery\Analyzer\Providers\MockTypeFactory;
 use AlfredBez\MagoMockery\Analyzer\Providers\CompositeExpectationProvider;
+use AlfredBez\MagoMockery\Analyzer\Providers\ExpectationAndMatcherSignatureProvider;
+use AlfredBez\MagoMockery\Analyzer\Providers\HigherOrderMessageProvider;
+use AlfredBez\MagoMockery\Analyzer\Providers\MockFactoryReturnTypeProvider;
+use AlfredBez\MagoMockery\Analyzer\Providers\MockHelperFunctionReturnTypeProvider;
+use AlfredBez\MagoMockery\Analyzer\Providers\MockTypeFactory;
 use AlfredBez\MagoMockery\Analyzer\Providers\NoArgumentFactoryProvider;
 use AlfredBez\MagoMockery\Analyzer\Providers\TraitMockConstantIssueFilter;
 use Mago\Sdk\Analyzer\Argument;
@@ -724,6 +727,74 @@ require_once dirname(__DIR__) . '/vendor/autoload.php';
     $check(
         $filterDecision('<?php use Mockery; function f($cb) { static $m; $m = Mockery::mock(T::class); for ($i = 0; $i < 2; ++$i) { $r = $m::TAG; mock(CtorInvoker::class, [$cb]); } return $r; }', '$m::TAG') === IssueFilterDecision::Keep,
         'Global mock helper inside loop must invalidate static-local cells.',
+    );
+
+    $factoryProvider = new MockFactoryReturnTypeProvider();
+    $factorySig = $factoryProvider->getCallableSignature(new CallableSignatureProviderContext(
+        PHPVersion::fromParts(8, 4),
+        $codebase,
+        new Invocation(InvocationKind::StaticMethod, 'namedMock', 'Mockery', Type::namedObject('Mockery'), $span, []),
+        new TypeComparator($host, 1, $cancellation),
+        $cancellation,
+    ));
+    $check(
+        $factorySig !== null && count($factorySig->parameters) === 1 && $factorySig->parameters[0]->variadic && (string) $factorySig->parameters[0]->type === 'mixed',
+        'MockFactoryReturnTypeProvider must override factory signatures with variadic mixed.',
+    );
+    $fetchSig = $factoryProvider->getCallableSignature(new CallableSignatureProviderContext(
+        PHPVersion::fromParts(8, 4),
+        $codebase,
+        new Invocation(InvocationKind::StaticMethod, 'fetchMock', 'Mockery', Type::namedObject('Mockery'), $span, []),
+        new TypeComparator($host, 1, $cancellation),
+        $cancellation,
+    ));
+    $check($fetchSig === null, 'MockFactoryReturnTypeProvider must defer fetchMock signature override to ExpectationAndMatcherSignatureProvider.');
+
+    $helperProvider = new MockHelperFunctionReturnTypeProvider();
+    $helperSig = $helperProvider->getCallableSignature(new CallableSignatureProviderContext(
+        PHPVersion::fromParts(8, 4),
+        $codebase,
+        new Invocation(InvocationKind::Function, 'mock', null, null, $span, []),
+        new TypeComparator($host, 1, $cancellation),
+        $cancellation,
+    ));
+    $check(
+        $helperSig !== null && count($helperSig->parameters) === 1 && $helperSig->parameters[0]->variadic && (string) $helperSig->parameters[0]->type === 'mixed',
+        'MockHelperFunctionReturnTypeProvider must override global helper signatures with variadic mixed.',
+    );
+
+    $fluentProvider = new ExpectationAndMatcherSignatureProvider();
+    foreach (['makePartial', 'byDefault', 'shouldAllowMockingProtectedMethods', 'shouldAllowMockingMethod', 'shouldDeferMissing'] as $fluentMethod) {
+        $fluentReturn = $fluentProvider->getReturnType(new ReturnTypeProviderContext(
+            PHPVersion::fromParts(8, 4),
+            $codebase,
+            new Invocation(InvocationKind::InstanceMethod, $fluentMethod, 'Mockery\\LegacyMockInterface', $stringAlphaMock, $span, []),
+            new TypeComparator($host, 1, $cancellation),
+            $cancellation,
+        ));
+        $check($fluentReturn === $stringAlphaMock, "Fluent builder {$fluentMethod}() must return the receiver mock type.");
+    }
+
+    $emptyArrayAtomic = new KeyedArrayType(knownItems: [], keyType: null, valueType: null, nonEmpty: false);
+    $nonEmptyMapAtomic = new KeyedArrayType(
+        knownItems: [new ArrayItem(new ArrayKey(ArrayKeyKind::String, 'known'), false, Type::string())],
+        keyType: null,
+        valueType: null,
+        nonEmpty: true,
+    );
+    $unionMaybeEmpty = Type::union(Type::fromAtomic($emptyArrayAtomic), Type::fromAtomic($nonEmptyMapAtomic));
+    $allowsUnionReturn = $provider->getReturnType(new ReturnTypeProviderContext(
+        PHPVersion::fromParts(8, 4),
+        $codebase,
+        new Invocation(InvocationKind::InstanceMethod, 'allows', 'Mockery\\MockInterface', $stringAlphaMock, $span, [
+            new Argument(null, false, false, $span, '$map', $unionMaybeEmpty),
+        ]),
+        new TypeComparator($host, 1, $cancellation),
+        $cancellation,
+    ));
+    $check(
+        $allowsUnionReturn !== null && count($allowsUnionReturn->atomicTypes) === 2,
+        'allows(array{}|array{known: string}) must return HigherOrderMessage|(T&MockInterface).',
     );
 
     fwrite(STDOUT, "Provider type and signature checks passed.\n");

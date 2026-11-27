@@ -51,6 +51,11 @@ final class NoArgumentFactoryProvider implements MethodReturnTypeProvider, Calla
         'shouldnothavereceived',
     ];
 
+    private const VARIADIC_EXPECTATION_FACTORIES = [
+        'shouldreceive' => 'shouldReceive',
+        'shouldnotreceive' => 'shouldNotReceive',
+    ];
+
     public function getTargets(): array
     {
         $targets = [];
@@ -68,7 +73,28 @@ final class NoArgumentFactoryProvider implements MethodReturnTypeProvider, Calla
 
     public function getCallableSignature(CallableSignatureProviderContext $context): ?EffectiveCallableSignature
     {
-        if (!in_array(strtolower($context->invocation->name), self::OPTIONAL_METHOD_VERIFIERS, true)) {
+        $lower = strtolower($context->invocation->name);
+
+        if (isset(self::VARIADIC_EXPECTATION_FACTORIES[$lower])) {
+            return new EffectiveCallableSignature(
+                parameters: [
+                    new CallableParameter(
+                        name: '$methodNames',
+                        type: Type::union(
+                            Type::string(),
+                            Type::array(Type::string(), Type::mixed()),
+                        ),
+                        variadic: true,
+                    ),
+                ],
+                allowsNamedArguments: true,
+                displayName: ($context->invocation->declaringClass ?? 'Mockery\\LegacyMockInterface')
+                    . '::'
+                    . self::VARIADIC_EXPECTATION_FACTORIES[$lower],
+            );
+        }
+
+        if (!in_array($lower, self::OPTIONAL_METHOD_VERIFIERS, true)) {
             return null;
         }
 
@@ -173,25 +199,34 @@ final class NoArgumentFactoryProvider implements MethodReturnTypeProvider, Calla
 
     private static function isEmptyArrayType(Type $type): bool
     {
-        if (count($type->atomicTypes) !== 1) {
+        foreach ($type->atomicTypes as $atomic) {
+            if ($atomic instanceof ListType) {
+                if (
+                    $atomic->nonEmpty
+                    || ($atomic->knownCount !== 0 && !($atomic->knownElements === [] && self::isNeverType($atomic->elementType)))
+                ) {
+                    return false;
+                }
+
+                continue;
+            }
+
+            if ($atomic instanceof KeyedArrayType) {
+                if (
+                    $atomic->nonEmpty
+                    || $atomic->keyType !== null
+                    || ($atomic->knownItems !== null && $atomic->knownItems !== [])
+                ) {
+                    return false;
+                }
+
+                continue;
+            }
+
             return false;
         }
 
-        $atomic = $type->atomicTypes[0];
-        if ($atomic instanceof ListType) {
-            return !$atomic->nonEmpty && (
-                $atomic->knownCount === 0
-                || ($atomic->knownElements === [] && self::isNeverType($atomic->elementType))
-            );
-        }
-
-        if ($atomic instanceof KeyedArrayType) {
-            return !$atomic->nonEmpty
-                && $atomic->keyType === null
-                && ($atomic->knownItems === null || $atomic->knownItems === []);
-        }
-
-        return false;
+        return true;
     }
 
     private static function isNeverType(Type $type): bool

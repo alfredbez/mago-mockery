@@ -52,6 +52,13 @@ $expected = [
         ],
         'tests/fixtures/Wave9FactoriesAndTraits.php' => [],
         'tests/fixtures/Wave12Contracts.php' => [],
+        'tests/fixtures/SignatureOverridesAndUnions.php' => [
+            'deprecated-method' => 1,
+        ],
+        'tests/fixtures/SignatureOverridesAndUnionsNegative.php' => [
+            'invalid-argument' => 4,
+            'too-many-arguments' => 1,
+        ],
         'tests/fixtures/IntersectionControl.php' => [
             'invalid-argument' => 1,
         ],
@@ -164,6 +171,18 @@ $expected = [
         'tests/fixtures/Wave12ContractsNegative.php' => [
             'non-existent-method' => 7,
             'too-few-arguments' => 1,
+        ],
+        'tests/fixtures/SignatureOverridesAndUnions.php' => [
+            'deprecated-method' => 1,
+            'non-documented-method' => 8,
+            'non-existent-method' => 8,
+            'redundant-condition' => 1,
+            'unreachable-else-clause' => 1,
+        ],
+        'tests/fixtures/SignatureOverridesAndUnionsNegative.php' => [
+            'invalid-argument' => 2,
+            'non-existent-method' => 2,
+            'too-many-arguments' => 1,
         ],
         'tests/fixtures/Wave9FactoriesAndTraits.php' => [
             'impossible-assignment' => 5,
@@ -488,6 +507,49 @@ $failures += assertMessageCount(
     'initializedInSetUpOnly',
     1,
 );
+
+$compat1612With = analyze(false, 'tests/mockery-1612.toml');
+$compat1612Without = analyze(true, 'tests/mockery-1612.toml');
+$failures += assertHistograms('mockery 1.6.12 with extension', $compat1612With, [
+    'tests/mockery-1612-fixtures/Mockery1612Compat.php' => [],
+    'tests/mockery-1612-fixtures/Mockery1612Negative.php' => [
+        'invalid-argument' => 2,
+        'non-existent-method' => 5,
+        'too-many-arguments' => 1,
+    ],
+]);
+$failures += assertHistograms('mockery 1.6.12 --no-extensions', $compat1612Without, [
+    'tests/mockery-1612-fixtures/Mockery1612Compat.php' => [
+        'invalid-argument' => 7,
+        'mixed-method-access' => 1,
+        'non-documented-method' => 6,
+        'non-existent-method' => 17,
+        'possibly-invalid-argument' => 5,
+        'template-constraint-violation' => 8,
+        'too-many-arguments' => 2,
+    ],
+    'tests/mockery-1612-fixtures/Mockery1612Negative.php' => [
+        'invalid-argument' => 4,
+        'non-existent-method' => 5,
+        'too-many-arguments' => 1,
+    ],
+]);
+foreach ([
+    'missingAfterPartial',
+    'missingAfterByDefault',
+    'missingAfterProtected',
+    'missingAfterAllowMethod',
+    'missingAfterDefer',
+] as $missingBuilderMethod) {
+    $failures += assertMessageCount(
+        'mockery 1.6.12 with extension',
+        $compat1612With,
+        'tests/mockery-1612-fixtures/Mockery1612Negative.php',
+        'non-existent-method',
+        "Method `{$missingBuilderMethod}` does not exist on type `MockeryCompat1612\\CompatGreeter`",
+        1,
+    );
+}
 
 $strictDefault = analyze(false, 'tests/strict-methods.toml');
 $strictEnabled = analyze(false, 'tests/strict-methods.toml', ['MAGO_MOCKERY_STRICT_METHODS' => '1']);

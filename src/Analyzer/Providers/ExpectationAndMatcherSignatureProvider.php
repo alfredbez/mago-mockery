@@ -22,6 +22,16 @@ use Mago\Sdk\Analyzer\Type\NamedObjectType;
  */
 final class ExpectationAndMatcherSignatureProvider implements MethodReturnTypeProvider, CallableSignatureOverride
 {
+    private const FLUENT_RETURN_SELF_METHODS = [
+        'asundefined' => true,
+        'bydefault' => true,
+        'makepartial' => true,
+        'shouldallowmockingmethod' => true,
+        'shouldallowmockingprotectedmethods' => true,
+        'shoulddefermissing' => true,
+        'shouldignoremissing' => true,
+    ];
+
     public function getTargets(): array
     {
         $targets = [
@@ -42,6 +52,11 @@ final class ExpectationAndMatcherSignatureProvider implements MethodReturnTypePr
         foreach (['Mockery\\Mock', 'Mockery\\MockInterface', 'Mockery\\LegacyMockInterface'] as $class) {
             $targets[] = MethodTarget::exact($class, 'shouldIgnoreMissing');
             $targets[] = MethodTarget::exact($class, 'asUndefined');
+            $targets[] = MethodTarget::exact($class, 'makePartial');
+            $targets[] = MethodTarget::exact($class, 'byDefault');
+            $targets[] = MethodTarget::exact($class, 'shouldAllowMockingProtectedMethods');
+            $targets[] = MethodTarget::exact($class, 'shouldAllowMockingMethod');
+            $targets[] = MethodTarget::exact($class, 'shouldDeferMissing');
         }
 
         // asUndefined() is declared on Mockery\Mock, not MockInterface. T&MockInterface
@@ -189,7 +204,7 @@ final class ExpectationAndMatcherSignatureProvider implements MethodReturnTypePr
         }
 
         if (in_array($class, ['mockery\\mock', 'mockery\\mockinterface', 'mockery\\legacymockinterface'], true)) {
-            if ($method === 'asundefined' || $method === 'shouldignoremissing') {
+            if (isset(self::FLUENT_RETURN_SELF_METHODS[$method])) {
                 return $context->invocation->receiverType;
             }
 

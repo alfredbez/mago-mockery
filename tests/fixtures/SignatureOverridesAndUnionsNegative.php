@@ -1,0 +1,20 @@
+<?php
+
+declare(strict_types=1);
+
+namespace MockeryFixture;
+
+use Mockery;
+
+final class SignatureOverridesAndUnionsNegative extends Support
+{
+    public function invalidExpectationArgumentShapes(): void
+    {
+        $mock = Mockery::mock(Greeter::class);
+        $mock->allows('greet', 'countGreetings');
+        $mock->shouldReceive(['greet']);
+        $mock->shouldNotReceive(['greet']);
+        $mock->shouldReceive('greet')->shouldReceive(['countGreetings']);
+        $mock->shouldReceive('greet')->shouldNotReceive(['countGreetings']);
+    }
+}

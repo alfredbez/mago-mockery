@@ -252,11 +252,21 @@ final class MockTypeFactory
             }
 
             if ($classes === [] && $namedMocks !== null) {
-                $indexed = $namedMocks->targetsForFetch($invocation->span, $literal);
-                if ($indexed !== null) {
-                    foreach ($indexed as $candidate) {
-                        self::addTargetIfValid($candidate, $codebase, $classes);
+                $targetSets = $namedMocks->targetSetsForFetch($invocation->span, $literal);
+                if ($targetSets !== null) {
+                    $unionTypes = [];
+                    foreach ($targetSets as $set) {
+                        $setClasses = [];
+                        foreach ($set as $candidate) {
+                            self::addTargetIfValid($candidate, $codebase, $setClasses);
+                        }
+                        if ($setClasses === []) {
+                            return null;
+                        }
+                        $unionTypes[] = self::createMultiple(array_values($setClasses));
                     }
+
+                    return Type::union(...$unionTypes, ...[Type::null()]);
                 }
             }
         } else {

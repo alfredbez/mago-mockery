@@ -52,6 +52,10 @@ $expected = [
         ],
         'tests/fixtures/Wave9FactoriesAndTraits.php' => [],
         'tests/fixtures/Wave12Contracts.php' => [],
+        'tests/fixtures/NamedMockScoping.php' => [],
+        'tests/fixtures/NamedMockScopingNegative.php' => [
+            'non-existent-method' => 2,
+        ],
         'tests/fixtures/SignatureOverridesAndUnions.php' => [
             'deprecated-method' => 1,
         ],
@@ -171,6 +175,16 @@ $expected = [
         'tests/fixtures/Wave12ContractsNegative.php' => [
             'non-existent-method' => 7,
             'too-few-arguments' => 1,
+        ],
+        'tests/fixtures/NamedMockScoping.php' => [
+            'impossible-condition' => 1,
+            'invalid-argument' => 1,
+            'mixed-return-statement' => 1,
+            'non-existent-method' => 6,
+            'possibly-invalid-argument' => 2,
+        ],
+        'tests/fixtures/NamedMockScopingNegative.php' => [
+            'non-existent-method' => 2,
         ],
         'tests/fixtures/SignatureOverridesAndUnions.php' => [
             'deprecated-method' => 1,
@@ -557,6 +571,7 @@ $failures += assertHistograms('strict default mode', $strictDefault, [
     'tests/strict-fixtures/StrictMethods.php' => [],
     'tests/strict-fixtures/Wave9StrictGaps.php' => [],
     'tests/strict-fixtures/Wave12Strict.php' => [],
+    'tests/strict-fixtures/StrictAllowancesAndUnions.php' => [],
 ]);
 $failures += assertHistograms('strict enabled mode', $strictEnabled, [
     'tests/strict-fixtures/StrictMethods.php' => [
@@ -567,6 +582,9 @@ $failures += assertHistograms('strict enabled mode', $strictEnabled, [
     ],
     'tests/strict-fixtures/Wave12Strict.php' => [
         'alfredbez/mockery/unknown-mocked-method' => 5,
+    ],
+    'tests/strict-fixtures/StrictAllowancesAndUnions.php' => [
+        'alfredbez/mockery/unknown-mocked-method' => 8,
     ],
 ]);
 foreach ([
@@ -597,6 +615,41 @@ foreach (['missing', 'dynAfterReassign', 'dynConditional', 'dynAfterUnset', 'dyn
         1,
     );
 }
+foreach ([
+    'dynAfterHelper',
+    'dynAfterThisAlias',
+    'dynOnChild',
+    'dynAfterByRef',
+    'dynAfterUnknownCall',
+    'missingUnionA',
+    'missingUnionB',
+    'missingUnionPartial',
+] as $missingMethod) {
+    $failures += assertMessageCount(
+        'strict enabled mode',
+        $strictEnabled,
+        'tests/strict-fixtures/StrictAllowancesAndUnions.php',
+        'alfredbez/mockery/unknown-mocked-method',
+        "Method `{$missingMethod}` does not exist on mocked type `MockeryFixture\\Strict\\StrictGreeter`",
+        1,
+    );
+}
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/NamedMockScopingNegative.php',
+    'non-existent-method',
+    'Method `fetch` does not exist on type `MockeryFixture\\Greeter`',
+    1,
+);
+$failures += assertMessageCount(
+    'with extension',
+    $with,
+    'tests/fixtures/NamedMockScopingNegative.php',
+    'non-existent-method',
+    'Method `greet` does not exist on type `Mockery\\MockInterface`',
+    1,
+);
 $failures += assertMessageCount(
     'strict enabled mode',
     $strictEnabled,

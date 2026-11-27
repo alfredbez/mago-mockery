@@ -4,6 +4,9 @@ declare(strict_types=1);
 
 namespace AlfredBez\MagoMockery\Analyzer\Providers;
 
+use Mago\Sdk\Analyzer\Codebase;
+use Mago\Sdk\Analyzer\Metadata\FunctionLikeMetadata;
+use Mago\Sdk\Analyzer\Metadata\MetadataFlags;
 use Mago\Sdk\Syntax\Node;
 use Mago\Sdk\Syntax\NodeKind;
 use Mago\Sdk\Syntax\SourceFile;
@@ -13,20 +16,30 @@ use function array_keys;
 use function array_pop;
 use function count;
 use function ltrim;
+use function preg_match;
+use function preg_replace;
 use function str_contains;
 use function str_starts_with;
 use function strlen;
-use function preg_match;
-use function preg_replace;
 use function strpos;
 use function strtolower;
 use function substr;
+use function trim;
 
 /**
  * Intra-procedural value-numbering and dominance-lite tracker for `shouldAllowMockingMethod()`.
  *
- * Tracks receiver identity across variable aliases and kills stale allowances on reassignment
- * or across control-flow splits where the allowance does not dominate the call site.
+ * Tracks receiver identity across variable aliases and kills stale allowances on reassignment,
+ * by-reference or unresolved calls, `$this` helper calls/aliases, or control-flow splits where
+ * the allowance does not dominate the call site.
+ *
+ * @phpstan-type ResolverState array{
+ *     vars: array<string, string>,
+ *     allowed: array<string, array<string, true>>,
+ *     refs: array<string, array<string, true>>,
+ *     thisAliases: array<string, true>,
+ *     terminated: bool
+ * }
  *
  * @internal
  */
@@ -42,6 +55,69 @@ final class StrictAllowanceResolver
         'shouldignoremissing' => true,
     ];
 
+    private const EXPECTATION_CHAIN_METHODS = [
+        'allows' => true,
+        'andreturn' => true,
+        'andreturnarg' => true,
+        'andreturnnull' => true,
+        'andreturns' => true,
+        'andreturnself' => true,
+        'andreturnusing' => true,
+        'andreturnvalues' => true,
+        'andset' => true,
+        'andthrow' => true,
+        'atleast' => true,
+        'atmost' => true,
+        'between' => true,
+        'expects' => true,
+        'getmock' => true,
+        'globally' => true,
+        'mock' => true,
+        'never' => true,
+        'once' => true,
+        'ordered' => true,
+        'passthru' => true,
+        'set' => true,
+        'shouldhavereceived' => true,
+        'shouldnothavereceived' => true,
+        'shouldnotreceive' => true,
+        'shouldreceive' => true,
+        'times' => true,
+        'twice' => true,
+        'with' => true,
+        'withanyargs' => true,
+        'withargs' => true,
+        'withnoargs' => true,
+        'withsomeofargs' => true,
+        'zeroormoretimes' => true,
+    ];
+
+    private const SAFE_BY_VALUE_MOCKERY_STATIC_METHODS = [
+        'andanyotherargs' => true,
+        'andanyothers' => true,
+        'any' => true,
+        'anyof' => true,
+        'contains' => true,
+        'ducktype' => true,
+        'fetchmock' => true,
+        'getcontainer' => true,
+        'haskey' => true,
+        'hasvalue' => true,
+        'instancemock' => true,
+        'isequal' => true,
+        'issame' => true,
+        'mock' => true,
+        'mustbe' => true,
+        'namedmock' => true,
+        'not' => true,
+        'notanyof' => true,
+        'on' => true,
+        'pattern' => true,
+        'spy' => true,
+        'subset' => true,
+        'type' => true,
+    ];
+
     private const CONDITIONAL_BINARY_OPERATORS = [
         '&&' => true,
         '||' => true,
@@ -52,13 +128,13 @@ final class StrictAllowanceResolver
 
     private function __construct() {}
 
-    public static function isAllowed(SourceFile $source, Node $call, string $wantedLower): bool
+    public static function isAllowed(SourceFile $source, Node $call, string $wantedLower, ?Codebase $codebase = null): bool
     {
         if (self::receiverChainAllowsMethod($source, $call, $wantedLower)) {
             return true;
         }
 
-        $receiverVar = self::baseReceiverVariableName($source, $call);
+        $receiverVar = self::baseReceiverVariableName($source, $call, allowExpectationChain: true);
         if ($receiverVar === null) {
             return false;
         }
@@ -74,10 +150,11 @@ final class StrictAllowanceResolver
             'vars' => [],
             'allowed' => [],
             'refs' => [],
+            'thisAliases' => [],
             'terminated' => false,
         ];
 
-        self::walkStatements($source, $statements, $call->span->start, $state, $nextId);
+        self::walkStatements($source, $statements, $call->span->start, $state, $nextId, $codebase);
 
         $id = self::varId($state, $receiverVar);
 
@@ -93,16 +170,34 @@ final class StrictAllowanceResolver
                 return true;
             }
 
+            $methodName = self::calledMethodName($source, $receiver);
+            $lower = $methodName !== null ? strtolower($methodName) : '';
+            if (!isset(self::FLUENT_PRESERVING_METHODS[$lower]) && !isset(self::EXPECTATION_CHAIN_METHODS[$lower])) {
+                return false;
+            }
+
             $receiver = self::unwrap($source, $source->getChildren($receiver)[0] ?? null);
         }
 
         return false;
     }
 
-    public static function baseReceiverVariableName(SourceFile $source, Node $call): ?string
-    {
+    public static function baseReceiverVariableName(
+        SourceFile $source,
+        Node $call,
+        bool $allowExpectationChain = true,
+    ): ?string {
         $current = self::unwrap($source, $source->getChildren($call)[0] ?? null);
         while ($current !== null && $current->kind === NodeKind::MethodCall) {
+            $methodName = self::calledMethodName($source, $current);
+            $lower = $methodName !== null ? strtolower($methodName) : '';
+            if (
+                !isset(self::FLUENT_PRESERVING_METHODS[$lower])
+                && !($allowExpectationChain && isset(self::EXPECTATION_CHAIN_METHODS[$lower]))
+            ) {
+                return null;
+            }
+
             $current = self::unwrap($source, $source->getChildren($current)[0] ?? null);
         }
 
@@ -134,7 +229,7 @@ final class StrictAllowanceResolver
 
     /**
      * @param list<Node> $statements
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      * @return bool True when traversal reached the target call offset and must stop.
      */
     private static function walkStatements(
@@ -143,6 +238,7 @@ final class StrictAllowanceResolver
         int $targetStart,
         array &$state,
         int &$nextId,
+        ?Codebase $codebase,
     ): bool {
         foreach ($statements as $statement) {
             if ($statement->span->start > $targetStart) {
@@ -155,17 +251,17 @@ final class StrictAllowanceResolver
             }
 
             if ($statement->span->end > $targetStart) {
-                return self::walkContainingStatement($source, $unwrapped, $targetStart, $state, $nextId);
+                return self::walkContainingStatement($source, $unwrapped, $targetStart, $state, $nextId, $codebase);
             }
 
-            self::processStatement($source, $unwrapped, $state, $nextId);
+            self::processStatement($source, $unwrapped, $state, $nextId, $codebase);
         }
 
         return false;
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
     private static function walkContainingStatement(
         SourceFile $source,
@@ -173,29 +269,31 @@ final class StrictAllowanceResolver
         int $targetStart,
         array &$state,
         int &$nextId,
+        ?Codebase $codebase,
     ): bool {
         if ($statement->kind->value === 'Namespace') {
-            return self::walkStatements($source, self::namespaceStatements($source, $statement), $targetStart, $state, $nextId);
+            return self::walkStatements($source, self::namespaceStatements($source, $statement), $targetStart, $state, $nextId, $codebase);
         }
 
         return match ($statement->kind) {
-            NodeKind::Block => self::walkStatements($source, $source->getChildren($statement), $targetStart, $state, $nextId),
-            NodeKind::If => self::walkContainingIf($source, $statement, $targetStart, $state, $nextId),
-            NodeKind::While, NodeKind::DoWhile, NodeKind::For, NodeKind::Foreach => self::walkContainingLoop($source, $statement, $targetStart, $state, $nextId),
-            NodeKind::Try => self::walkContainingTry($source, $statement, $targetStart, $state, $nextId),
-            NodeKind::Switch => self::walkContainingSwitch($source, $statement, $targetStart, $state, $nextId),
-            default => self::walkExpressionUntil($source, $statement, $targetStart, $state, $nextId),
+            NodeKind::Block => self::walkStatements($source, $source->getChildren($statement), $targetStart, $state, $nextId, $codebase),
+            NodeKind::If => self::walkContainingIf($source, $statement, $targetStart, $state, $nextId, $codebase),
+            NodeKind::While, NodeKind::DoWhile, NodeKind::For, NodeKind::Foreach => self::walkContainingLoop($source, $statement, $targetStart, $state, $nextId, $codebase),
+            NodeKind::Try => self::walkContainingTry($source, $statement, $targetStart, $state, $nextId, $codebase),
+            NodeKind::Switch => self::walkContainingSwitch($source, $statement, $targetStart, $state, $nextId, $codebase),
+            default => self::walkExpressionUntil($source, $statement, $targetStart, $state, $nextId, $codebase),
         };
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
     private static function processStatement(
         SourceFile $source,
         Node $statement,
         array &$state,
         int &$nextId,
+        ?Codebase $codebase,
     ): void {
         if ($state['terminated']) {
             return;
@@ -205,7 +303,7 @@ final class StrictAllowanceResolver
             foreach (self::namespaceStatements($source, $statement) as $child) {
                 $inner = self::unwrapStatement($source, $child);
                 if ($inner !== null && !self::isScopeBoundary($inner->kind)) {
-                    self::processStatement($source, $inner, $state, $nextId);
+                    self::processStatement($source, $inner, $state, $nextId, $codebase);
                 }
             }
             return;
@@ -216,7 +314,7 @@ final class StrictAllowanceResolver
                 foreach ($source->getChildren($statement) as $child) {
                     $inner = self::unwrapStatement($source, $child);
                     if ($inner !== null && !self::isScopeBoundary($inner->kind)) {
-                        self::processStatement($source, $inner, $state, $nextId);
+                        self::processStatement($source, $inner, $state, $nextId, $codebase);
                     }
                 }
                 return;
@@ -224,13 +322,13 @@ final class StrictAllowanceResolver
             case NodeKind::ExpressionStatement:
                 foreach ($source->getChildren($statement) as $child) {
                     if ($child->kind !== NodeKind::Terminator) {
-                        self::processExpression($source, $child, $state, $nextId, allowGrants: true);
+                        self::processExpression($source, $child, $state, $nextId, allowGrants: true, codebase: $codebase);
                     }
                 }
                 return;
 
             case NodeKind::If:
-                self::processIf($source, $statement, $state, $nextId);
+                self::processIf($source, $statement, $state, $nextId, $codebase);
                 return;
 
             case NodeKind::While:
@@ -238,11 +336,11 @@ final class StrictAllowanceResolver
             case NodeKind::For:
             case NodeKind::Foreach:
             case NodeKind::Switch:
-                self::killWrittenVariables($source, $statement, $state, $nextId);
+                self::killWrittenVariables($source, $statement, $state, $nextId, $codebase);
                 return;
 
             case NodeKind::Try:
-                self::processTry($source, $statement, $state, $nextId);
+                self::processTry($source, $statement, $state, $nextId, $codebase);
                 return;
 
             case NodeKind::Unset:
@@ -251,6 +349,9 @@ final class StrictAllowanceResolver
                     if ($key !== null) {
                         self::detachRef($state, $key);
                         $state['vars'][$key] = self::freshId($nextId);
+                        unset($state['thisAliases'][$key]);
+                    } else {
+                        self::killAliasedThisProperty($source, $child, $state, $nextId);
                     }
                 }
                 foreach ($source->getDescendants($statement, NodeKind::DirectVariable) as $var) {
@@ -258,6 +359,7 @@ final class StrictAllowanceResolver
                         $varName = $source->getText($var);
                         self::detachRef($state, $varName);
                         $state['vars'][$varName] = self::freshId($nextId);
+                        unset($state['thisAliases'][$varName]);
                     }
                 }
                 return;
@@ -266,49 +368,49 @@ final class StrictAllowanceResolver
             case NodeKind::Throw:
             case NodeKind::Break:
             case NodeKind::Continue:
-                self::killWrittenVariables($source, $statement, $state, $nextId);
+                self::killWrittenVariables($source, $statement, $state, $nextId, $codebase);
                 $state['terminated'] = true;
                 return;
 
             default:
                 if (self::containsExitOrDie($source, $statement)) {
-                    self::killWrittenVariables($source, $statement, $state, $nextId);
+                    self::killWrittenVariables($source, $statement, $state, $nextId, $codebase);
                     $state['terminated'] = true;
                     return;
                 }
-                self::killWrittenVariables($source, $statement, $state, $nextId);
+                self::killWrittenVariables($source, $statement, $state, $nextId, $codebase);
         }
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
-    private static function processIf(SourceFile $source, Node $ifNode, array &$state, int &$nextId): void
+    private static function processIf(SourceFile $source, Node $ifNode, array &$state, int &$nextId, ?Codebase $codebase): void
     {
         $parts = self::extractIfParts($source, $ifNode);
         if ($parts['condition'] !== null) {
-            self::processExpression($source, $parts['condition'], $state, $nextId, allowGrants: false);
+            self::processExpression($source, $parts['condition'], $state, $nextId, allowGrants: false, codebase: $codebase);
         }
 
         $branchStates = [];
 
         $thenState = $state;
-        self::processStatementList($source, $parts['then'], $thenState, $nextId);
+        self::processStatementList($source, $parts['then'], $thenState, $nextId, $codebase);
         $branchStates[] = $thenState;
 
         $condCarry = $state;
         foreach ($parts['elseifs'] as $elseIf) {
             if ($elseIf['condition'] !== null) {
-                self::processExpression($source, $elseIf['condition'], $condCarry, $nextId, allowGrants: false);
+                self::processExpression($source, $elseIf['condition'], $condCarry, $nextId, allowGrants: false, codebase: $codebase);
             }
             $branchState = $condCarry;
-            self::processStatementList($source, $elseIf['statements'], $branchState, $nextId);
+            self::processStatementList($source, $elseIf['statements'], $branchState, $nextId, $codebase);
             $branchStates[] = $branchState;
         }
 
         if ($parts['else'] !== null) {
             $elseState = $condCarry;
-            self::processStatementList($source, $parts['else'], $elseState, $nextId);
+            self::processStatementList($source, $parts['else'], $elseState, $nextId, $codebase);
             $branchStates[] = $elseState;
         } else {
             $branchStates[] = $condCarry;
@@ -318,7 +420,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
     private static function walkContainingIf(
         SourceFile $source,
@@ -326,40 +428,41 @@ final class StrictAllowanceResolver
         int $targetStart,
         array &$state,
         int &$nextId,
+        ?Codebase $codebase,
     ): bool {
         $parts = self::extractIfParts($source, $ifNode);
         if ($parts['condition'] !== null) {
             if ($parts['condition']->span->start <= $targetStart && $parts['condition']->span->end > $targetStart) {
-                return self::walkExpressionUntil($source, $parts['condition'], $targetStart, $state, $nextId);
+                return self::walkExpressionUntil($source, $parts['condition'], $targetStart, $state, $nextId, $codebase);
             }
-            self::processExpression($source, $parts['condition'], $state, $nextId, allowGrants: false);
+            self::processExpression($source, $parts['condition'], $state, $nextId, allowGrants: false, codebase: $codebase);
         }
 
         if (self::statementsContainOffset($parts['then'], $targetStart)) {
-            return self::walkStatements($source, $parts['then'], $targetStart, $state, $nextId);
+            return self::walkStatements($source, $parts['then'], $targetStart, $state, $nextId, $codebase);
         }
 
         foreach ($parts['elseifs'] as $elseIf) {
             if ($elseIf['condition'] !== null) {
                 if ($elseIf['condition']->span->start <= $targetStart && $elseIf['condition']->span->end > $targetStart) {
-                    return self::walkExpressionUntil($source, $elseIf['condition'], $targetStart, $state, $nextId);
+                    return self::walkExpressionUntil($source, $elseIf['condition'], $targetStart, $state, $nextId, $codebase);
                 }
-                self::processExpression($source, $elseIf['condition'], $state, $nextId, allowGrants: false);
+                self::processExpression($source, $elseIf['condition'], $state, $nextId, allowGrants: false, codebase: $codebase);
             }
             if (self::statementsContainOffset($elseIf['statements'], $targetStart)) {
-                return self::walkStatements($source, $elseIf['statements'], $targetStart, $state, $nextId);
+                return self::walkStatements($source, $elseIf['statements'], $targetStart, $state, $nextId, $codebase);
             }
         }
 
         if ($parts['else'] !== null && self::statementsContainOffset($parts['else'], $targetStart)) {
-            return self::walkStatements($source, $parts['else'], $targetStart, $state, $nextId);
+            return self::walkStatements($source, $parts['else'], $targetStart, $state, $nextId, $codebase);
         }
 
         return true;
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
     private static function walkContainingLoop(
         SourceFile $source,
@@ -367,42 +470,43 @@ final class StrictAllowanceResolver
         int $targetStart,
         array &$state,
         int &$nextId,
+        ?Codebase $codebase,
     ): bool {
         // Kill variables written anywhere in the loop before entering so a back-edge reassignment
         // cannot inherit a pre-loop allowance.
-        self::killWrittenVariables($source, $loopNode, $state, $nextId);
+        self::killWrittenVariables($source, $loopNode, $state, $nextId, $codebase);
 
         $bodyStatements = self::extractLoopBodyStatements($source, $loopNode);
         if ($bodyStatements !== [] && self::statementsContainOffset($bodyStatements, $targetStart)) {
-            return self::walkStatements($source, $bodyStatements, $targetStart, $state, $nextId);
+            return self::walkStatements($source, $bodyStatements, $targetStart, $state, $nextId, $codebase);
         }
 
         return true;
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
-    private static function processTry(SourceFile $source, Node $tryNode, array &$state, int &$nextId): void
+    private static function processTry(SourceFile $source, Node $tryNode, array &$state, int &$nextId, ?Codebase $codebase): void
     {
         $parts = self::extractTryParts($source, $tryNode);
         $entryState = $state;
 
         $tryState = $entryState;
         if ($parts['try'] !== null) {
-            self::processStatementList($source, $source->getChildren($parts['try']), $tryState, $nextId);
+            self::processStatementList($source, $source->getChildren($parts['try']), $tryState, $nextId, $codebase);
         }
 
         $branchStates = [$tryState];
         foreach ($parts['catches'] as $catchNode) {
             $catchState = $entryState;
             if ($parts['try'] !== null) {
-                self::killWrittenVariables($source, $parts['try'], $catchState, $nextId);
+                self::killWrittenVariables($source, $parts['try'], $catchState, $nextId, $codebase);
             }
             self::killCatchVariable($source, $catchNode, $catchState, $nextId);
             $catchBlock = self::firstChildOfKind($source, $catchNode, NodeKind::Block);
             if ($catchBlock !== null) {
-                self::processStatementList($source, $source->getChildren($catchBlock), $catchState, $nextId);
+                self::processStatementList($source, $source->getChildren($catchBlock), $catchState, $nextId, $codebase);
             }
             $branchStates[] = $catchState;
         }
@@ -414,7 +518,7 @@ final class StrictAllowanceResolver
             if ($finallyBlock !== null) {
                 $wasTerminated = $state['terminated'];
                 $state['terminated'] = false;
-                self::processStatementList($source, $source->getChildren($finallyBlock), $state, $nextId);
+                self::processStatementList($source, $source->getChildren($finallyBlock), $state, $nextId, $codebase);
                 if ($wasTerminated) {
                     $state['terminated'] = true;
                 }
@@ -423,7 +527,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
     private static function walkContainingTry(
         SourceFile $source,
@@ -431,21 +535,22 @@ final class StrictAllowanceResolver
         int $targetStart,
         array &$state,
         int &$nextId,
+        ?Codebase $codebase,
     ): bool {
         $parts = self::extractTryParts($source, $tryNode);
         if ($parts['try'] !== null && $parts['try']->span->start <= $targetStart && $parts['try']->span->end > $targetStart) {
-            return self::walkStatements($source, $source->getChildren($parts['try']), $targetStart, $state, $nextId);
+            return self::walkStatements($source, $source->getChildren($parts['try']), $targetStart, $state, $nextId, $codebase);
         }
 
         foreach ($parts['catches'] as $catchNode) {
             if ($catchNode->span->start <= $targetStart && $catchNode->span->end > $targetStart) {
                 if ($parts['try'] !== null) {
-                    self::killWrittenVariables($source, $parts['try'], $state, $nextId);
+                    self::killWrittenVariables($source, $parts['try'], $state, $nextId, $codebase);
                 }
                 self::killCatchVariable($source, $catchNode, $state, $nextId);
                 $catchBlock = self::firstChildOfKind($source, $catchNode, NodeKind::Block);
                 if ($catchBlock !== null) {
-                    return self::walkStatements($source, $source->getChildren($catchBlock), $targetStart, $state, $nextId);
+                    return self::walkStatements($source, $source->getChildren($catchBlock), $targetStart, $state, $nextId, $codebase);
                 }
                 return true;
             }
@@ -453,14 +558,14 @@ final class StrictAllowanceResolver
 
         if ($parts['finally'] !== null && $parts['finally']->span->start <= $targetStart && $parts['finally']->span->end > $targetStart) {
             if ($parts['try'] !== null) {
-                self::killWrittenVariables($source, $parts['try'], $state, $nextId);
+                self::killWrittenVariables($source, $parts['try'], $state, $nextId, $codebase);
             }
             foreach ($parts['catches'] as $catchNode) {
-                self::killWrittenVariables($source, $catchNode, $state, $nextId);
+                self::killWrittenVariables($source, $catchNode, $state, $nextId, $codebase);
             }
             $finallyBlock = self::firstChildOfKind($source, $parts['finally'], NodeKind::Block);
             if ($finallyBlock !== null) {
-                return self::walkStatements($source, $source->getChildren($finallyBlock), $targetStart, $state, $nextId);
+                return self::walkStatements($source, $source->getChildren($finallyBlock), $targetStart, $state, $nextId, $codebase);
             }
         }
 
@@ -468,7 +573,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
     private static function walkContainingSwitch(
         SourceFile $source,
@@ -476,8 +581,9 @@ final class StrictAllowanceResolver
         int $targetStart,
         array &$state,
         int &$nextId,
+        ?Codebase $codebase,
     ): bool {
-        self::killWrittenVariables($source, $switchNode, $state, $nextId);
+        self::killWrittenVariables($source, $switchNode, $state, $nextId, $codebase);
         foreach ($source->getDescendants($switchNode, NodeKind::SwitchCase) as $caseWrapper) {
             if ($caseWrapper->span->start > $targetStart || $caseWrapper->span->end <= $targetStart) {
                 continue;
@@ -493,7 +599,7 @@ final class StrictAllowanceResolver
                 }
             }
             if ($caseStatements !== []) {
-                return self::walkStatements($source, $caseStatements, $targetStart, $state, $nextId);
+                return self::walkStatements($source, $caseStatements, $targetStart, $state, $nextId, $codebase);
             }
         }
 
@@ -502,20 +608,20 @@ final class StrictAllowanceResolver
 
     /**
      * @param list<Node> $statements
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
-    private static function processStatementList(SourceFile $source, array $statements, array &$state, int &$nextId): void
+    private static function processStatementList(SourceFile $source, array $statements, array &$state, int &$nextId, ?Codebase $codebase): void
     {
         foreach ($statements as $statement) {
             $unwrapped = self::unwrapStatement($source, $statement);
             if ($unwrapped !== null && !self::isScopeBoundary($unwrapped->kind)) {
-                self::processStatement($source, $unwrapped, $state, $nextId);
+                self::processStatement($source, $unwrapped, $state, $nextId, $codebase);
             }
         }
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
     private static function walkExpressionUntil(
         SourceFile $source,
@@ -523,13 +629,14 @@ final class StrictAllowanceResolver
         int $targetStart,
         array &$state,
         int &$nextId,
+        ?Codebase $codebase,
     ): bool {
         if ($node->span->start >= $targetStart || self::isScopeBoundary($node->kind)) {
             return true;
         }
 
         if ($node->span->end <= $targetStart) {
-            self::processExpression($source, $node, $state, $nextId, allowGrants: false);
+            self::processExpression($source, $node, $state, $nextId, allowGrants: false, codebase: $codebase);
             return false;
         }
 
@@ -538,10 +645,10 @@ final class StrictAllowanceResolver
                 return true;
             }
             if ($child->span->end <= $targetStart) {
-                self::processExpression($source, $child, $state, $nextId, allowGrants: false);
+                self::processExpression($source, $child, $state, $nextId, allowGrants: false, codebase: $codebase);
                 continue;
             }
-            if (self::walkExpressionUntil($source, $child, $targetStart, $state, $nextId)) {
+            if (self::walkExpressionUntil($source, $child, $targetStart, $state, $nextId, $codebase)) {
                 return true;
             }
         }
@@ -550,7 +657,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
     private static function processExpression(
         SourceFile $source,
@@ -558,6 +665,7 @@ final class StrictAllowanceResolver
         array &$state,
         int &$nextId,
         bool $allowGrants,
+        ?Codebase $codebase,
     ): void {
         $unwrapped = self::unwrap($source, $node);
         if ($unwrapped === null || self::isScopeBoundary($unwrapped->kind)) {
@@ -565,17 +673,25 @@ final class StrictAllowanceResolver
         }
 
         if ($unwrapped->kind === NodeKind::Assignment) {
-            self::processAssignment($source, $unwrapped, $state, $nextId, $allowGrants);
+            self::processAssignment($source, $unwrapped, $state, $nextId, $allowGrants, $codebase);
             return;
         }
 
-        if ($unwrapped->kind === NodeKind::MethodCall) {
-            self::processMethodCallExpression($source, $unwrapped, $state, $nextId, $allowGrants);
+        if ($unwrapped->kind === NodeKind::MethodCall || $unwrapped->kind === NodeKind::NullSafeMethodCall) {
+            self::processMethodCallExpression($source, $unwrapped, $state, $nextId, $allowGrants, $codebase);
+            return;
+        }
+
+        if ($unwrapped->kind === NodeKind::FunctionCall || $unwrapped->kind === NodeKind::StaticMethodCall || $unwrapped->kind === NodeKind::Instantiation) {
+            foreach ($source->getChildren($unwrapped) as $child) {
+                self::processExpression($source, $child, $state, $nextId, $allowGrants, $codebase);
+            }
+            self::invalidateCallArguments($source, $unwrapped, $state, $nextId, $codebase);
             return;
         }
 
         if ($unwrapped->kind === NodeKind::Conditional || $unwrapped->kind === NodeKind::Match) {
-            self::killWrittenVariables($source, $unwrapped, $state, $nextId);
+            self::killWrittenVariables($source, $unwrapped, $state, $nextId, $codebase);
             return;
         }
 
@@ -585,10 +701,10 @@ final class StrictAllowanceResolver
             $op = $opNode !== null ? strtolower(trim($source->getText($opNode))) : '';
             if (isset(self::CONDITIONAL_BINARY_OPERATORS[$op])) {
                 if (isset($children[0])) {
-                    self::processExpression($source, $children[0], $state, $nextId, $allowGrants);
+                    self::processExpression($source, $children[0], $state, $nextId, $allowGrants, $codebase);
                 }
                 if (isset($children[2])) {
-                    self::killWrittenVariables($source, $children[2], $state, $nextId);
+                    self::killWrittenVariables($source, $children[2], $state, $nextId, $codebase);
                 }
                 return;
             }
@@ -600,12 +716,12 @@ final class StrictAllowanceResolver
         }
 
         foreach ($source->getChildren($unwrapped) as $child) {
-            self::processExpression($source, $child, $state, $nextId, $allowGrants);
+            self::processExpression($source, $child, $state, $nextId, $allowGrants, $codebase);
         }
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
     private static function processAssignment(
         SourceFile $source,
@@ -613,6 +729,7 @@ final class StrictAllowanceResolver
         array &$state,
         int &$nextId,
         bool $allowGrants,
+        ?Codebase $codebase,
     ): void {
         $children = $source->getChildren($assignment);
         $lhsNode = $children[0] ?? null;
@@ -621,7 +738,7 @@ final class StrictAllowanceResolver
         $op = $opNode !== null ? trim($source->getText($opNode)) : '';
 
         if ($rhsNode !== null) {
-            self::processExpression($source, $rhsNode, $state, $nextId, $allowGrants);
+            self::processExpression($source, $rhsNode, $state, $nextId, $allowGrants, $codebase);
         }
 
         $lhsUnwrapped = self::unwrap($source, $lhsNode);
@@ -629,11 +746,26 @@ final class StrictAllowanceResolver
             return;
         }
 
+        $rhsIsThisAlias = $rhsNode !== null && self::isThisOrAlias($source, $rhsNode, $state);
         $lhsVar = self::identityKey($source, $lhsUnwrapped);
         if ($lhsVar === null) {
-            self::killWrittenVariables($source, $lhsUnwrapped, $state, $nextId);
+            self::killAliasedThisProperty($source, $lhsUnwrapped, $state, $nextId);
+            if ($rhsIsThisAlias) {
+                self::killThisProperties($state, $nextId);
+            }
+            self::killWrittenVariables($source, $lhsUnwrapped, $state, $nextId, $codebase);
             return;
         }
+
+        $isLocalVar = !str_starts_with($lhsVar, '$this->');
+        if ($isLocalVar) {
+            if ($rhsIsThisAlias) {
+                $state['thisAliases'][$lhsVar] = true;
+            } else {
+                unset($state['thisAliases'][$lhsVar]);
+            }
+        }
+
         $isByRef = self::isByReferenceAssignment($source, $assignment, $op, $rhsNode);
         if ($isByRef && $rhsNode !== null) {
             self::detachRef($state, $lhsVar);
@@ -736,7 +868,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
     private static function processMethodCallExpression(
         SourceFile $source,
@@ -744,16 +876,30 @@ final class StrictAllowanceResolver
         array &$state,
         int &$nextId,
         bool $allowGrants,
+        ?Codebase $codebase,
     ): void {
         $children = $source->getChildren($call);
         if (isset($children[0])) {
-            self::processExpression($source, $children[0], $state, $nextId, $allowGrants);
+            self::processExpression($source, $children[0], $state, $nextId, $allowGrants, $codebase);
         }
         if (isset($children[2])) {
-            self::processExpression($source, $children[2], $state, $nextId, $allowGrants);
+            self::processExpression($source, $children[2], $state, $nextId, $allowGrants, $codebase);
         }
 
-        if (!$allowGrants) {
+        $called = self::calledMethodName($source, $call);
+        $calledLower = $called !== null ? strtolower($called) : '';
+
+        if (isset($children[0]) && self::isThisOrAlias($source, $children[0], $state)) {
+            if (!isset(self::FLUENT_PRESERVING_METHODS[$calledLower])) {
+                self::killThisProperties($state, $nextId);
+            }
+        }
+
+        if (!isset(self::FLUENT_PRESERVING_METHODS[$calledLower]) && !isset(self::EXPECTATION_CHAIN_METHODS[$calledLower])) {
+            self::invalidateCallArguments($source, $call, $state, $nextId, $codebase);
+        }
+
+        if (!$allowGrants || $call->kind !== NodeKind::MethodCall) {
             return;
         }
 
@@ -762,7 +908,7 @@ final class StrictAllowanceResolver
             return;
         }
 
-        $receiverVar = self::baseReceiverVariableName($source, $call);
+        $receiverVar = self::baseReceiverVariableName($source, $call, allowExpectationChain: false);
         if ($receiverVar === null) {
             return;
         }
@@ -772,13 +918,14 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
     private static function killWrittenVariables(
         SourceFile $source,
         Node $subtree,
         array &$state,
         int &$nextId,
+        ?Codebase $codebase,
     ): void {
         foreach ($source->getDescendants($subtree, NodeKind::Assignment) as $assignment) {
             if (self::isInsideNestedScope($source, $subtree, $assignment)) {
@@ -794,7 +941,11 @@ final class StrictAllowanceResolver
             }
             $lhsUnwrapped = self::unwrap($source, $lhs);
             $lhsVar = $lhsUnwrapped !== null ? self::identityKey($source, $lhsUnwrapped) : null;
+            $rhsIsThis = $rhs !== null && self::isThisOrAlias($source, $rhs, $state);
             if ($lhsVar !== null) {
+                if ($rhsIsThis && !str_starts_with($lhsVar, '$this->')) {
+                    $state['thisAliases'][$lhsVar] = true;
+                }
                 if (self::isByReferenceAssignment($source, $assignment, $op, $rhs) && $rhs !== null) {
                     $refTarget = self::extractReferenceTargetVar($source, $rhs);
                     if ($refTarget !== null) {
@@ -803,6 +954,12 @@ final class StrictAllowanceResolver
                 }
                 self::killVar($state, $lhsVar, $nextId);
                 continue;
+            }
+            if ($lhsUnwrapped !== null) {
+                self::killAliasedThisProperty($source, $lhsUnwrapped, $state, $nextId);
+            }
+            if ($rhsIsThis) {
+                self::killThisProperties($state, $nextId);
             }
             foreach ($source->getDescendants($lhs, NodeKind::DirectVariable) as $var) {
                 if (!self::isInsideNestedScope($source, $subtree, $var)) {
@@ -819,6 +976,8 @@ final class StrictAllowanceResolver
                 $key = self::identityKey($source, $child);
                 if ($key !== null) {
                     self::killVar($state, $key, $nextId);
+                } else {
+                    self::killAliasedThisProperty($source, $child, $state, $nextId);
                 }
             }
             foreach ($source->getDescendants($unsetNode, NodeKind::DirectVariable) as $var) {
@@ -845,24 +1004,289 @@ final class StrictAllowanceResolver
             }
             self::killCatchVariable($source, $catchNode, $state, $nextId);
         }
+
+        foreach ([NodeKind::MethodCall, NodeKind::NullSafeMethodCall] as $callKind) {
+            foreach ($source->getDescendants($subtree, $callKind) as $methodCall) {
+                if (self::isInsideNestedScope($source, $subtree, $methodCall)) {
+                    continue;
+                }
+                $called = self::calledMethodName($source, $methodCall);
+                $calledLower = $called !== null ? strtolower($called) : '';
+                $receiver = $source->getChildren($methodCall)[0] ?? null;
+                if ($receiver !== null && self::isThisOrAlias($source, $receiver, $state) && !isset(self::FLUENT_PRESERVING_METHODS[$calledLower])) {
+                    self::killThisProperties($state, $nextId);
+                }
+                if (!isset(self::FLUENT_PRESERVING_METHODS[$calledLower]) && !isset(self::EXPECTATION_CHAIN_METHODS[$calledLower])) {
+                    self::invalidateCallArguments($source, $methodCall, $state, $nextId, $codebase);
+                }
+            }
+        }
+
+        foreach ([NodeKind::FunctionCall, NodeKind::StaticMethodCall, NodeKind::Instantiation] as $callKind) {
+            foreach ($source->getDescendants($subtree, $callKind) as $callNode) {
+                if (self::isInsideNestedScope($source, $subtree, $callNode)) {
+                    continue;
+                }
+                self::invalidateCallArguments($source, $callNode, $state, $nextId, $codebase);
+            }
+        }
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
+     */
+    private static function invalidateCallArguments(
+        SourceFile $source,
+        Node $call,
+        array &$state,
+        int &$nextId,
+        ?Codebase $codebase,
+    ): void {
+        $argList = self::firstChildOfKind($source, $call, NodeKind::ArgumentList);
+        if ($argList === null) {
+            return;
+        }
+
+        $knownSafeByValue = self::isKnownSafeByValueStaticCall($source, $call);
+        $meta = $knownSafeByValue ? null : self::resolveCallMetadata($source, $call, $codebase);
+
+        $posIdx = 0;
+        $seenUnpack = false;
+        foreach ($source->getChildren($argList) as $argument) {
+            $variant = $source->getChildren($argument)[0] ?? null;
+            if ($variant === null) {
+                continue;
+            }
+
+            $namedArg = null;
+            $valueNode = null;
+            if ($variant->kind === NodeKind::PositionalArgument) {
+                $parts = $source->getChildren($variant);
+                $argText = ltrim($source->getText($variant));
+                if (str_starts_with($argText, '...')) {
+                    $seenUnpack = true;
+                    ++$posIdx;
+                    continue;
+                }
+                $valueNode = $parts[0] ?? null;
+            } elseif ($variant->kind === NodeKind::NamedArgument) {
+                $parts = $source->getChildren($variant);
+                if (isset($parts[0], $parts[1])) {
+                    $namedArg = $source->getText($parts[0]);
+                    $valueNode = $parts[1];
+                }
+            }
+
+            if ($valueNode !== null) {
+                if (!$knownSafeByValue && self::isThisOrAlias($source, $valueNode, $state)) {
+                    self::killThisProperties($state, $nextId);
+                }
+
+                $argKey = self::identityKey($source, $valueNode);
+                if (
+                    $argKey !== null
+                    && !$knownSafeByValue
+                    && ($meta === null || self::parameterMayBeByRef($meta, $posIdx, $namedArg, $seenUnpack))
+                ) {
+                    self::killVar($state, $argKey, $nextId);
+                }
+            }
+
+            ++$posIdx;
+        }
+    }
+
+    private static function isKnownSafeByValueStaticCall(SourceFile $source, Node $call): bool
+    {
+        if ($call->kind !== NodeKind::StaticMethodCall) {
+            return false;
+        }
+
+        $children = $source->getChildren($call);
+        $classNode = self::unwrap($source, $children[0] ?? null);
+        if ($classNode === null) {
+            return false;
+        }
+
+        $resolved = $source->getResolvedName($classNode)?->name ?? $source->getText($classNode);
+        if (strtolower(ltrim($resolved, '\\')) !== 'mockery') {
+            return false;
+        }
+
+        $method = self::calledMethodName($source, $call);
+
+        return $method !== null && isset(self::SAFE_BY_VALUE_MOCKERY_STATIC_METHODS[strtolower($method)]);
+    }
+
+    private static function resolveCallMetadata(SourceFile $source, Node $call, ?Codebase $codebase): ?FunctionLikeMetadata
+    {
+        if ($codebase === null) {
+            return null;
+        }
+
+        if ($call->kind === NodeKind::FunctionCall) {
+            $callee = self::unwrap($source, $source->getChildren($call)[0] ?? null);
+            if ($callee === null) {
+                return null;
+            }
+            if (
+                $callee->kind !== NodeKind::Identifier
+                && $callee->kind !== NodeKind::LocalIdentifier
+                && $callee->kind !== NodeKind::QualifiedIdentifier
+                && $callee->kind !== NodeKind::FullyQualifiedIdentifier
+            ) {
+                return null;
+            }
+            $name = ltrim($source->getResolvedName($callee)?->name ?? $source->getText($callee), '\\');
+            if ($name === '') {
+                return null;
+            }
+
+            return $codebase->getFunction($name);
+        }
+
+        if ($call->kind === NodeKind::StaticMethodCall) {
+            $children = $source->getChildren($call);
+            $classNode = self::unwrap($source, $children[0] ?? null);
+            $methodName = self::calledMethodName($source, $call);
+            if ($classNode === null || $methodName === null) {
+                return null;
+            }
+            $className = ltrim($source->getResolvedName($classNode)?->name ?? $source->getText($classNode), '\\');
+            if ($className === '' || $className[0] === '$') {
+                return null;
+            }
+
+            return $codebase->getDeclaringMethod($className, $methodName);
+        }
+
+        if ($call->kind === NodeKind::Instantiation) {
+            $classNode = self::unwrap($source, $source->getChildren($call)[0] ?? null);
+            if ($classNode === null) {
+                return null;
+            }
+            $className = ltrim($source->getResolvedName($classNode)?->name ?? $source->getText($classNode), '\\');
+            if ($className === '' || $className[0] === '$') {
+                return null;
+            }
+
+            return $codebase->getDeclaringMethod($className, '__construct');
+        }
+
+        return null;
+    }
+
+    private static function parameterMayBeByRef(FunctionLikeMetadata $meta, int $posIdx, ?string $namedArg, bool $afterUnpack): bool
+    {
+        $params = $meta->parameters;
+        $last = $params !== [] ? $params[count($params) - 1] : null;
+        if ($namedArg !== null) {
+            foreach ($params as $param) {
+                if (ltrim($param->name, '$') === $namedArg) {
+                    return $param->flags->contains(MetadataFlags::BY_REFERENCE);
+                }
+            }
+
+            return $last !== null && $last->flags->contains(MetadataFlags::VARIADIC) && $last->flags->contains(MetadataFlags::BY_REFERENCE);
+        }
+        if ($afterUnpack) {
+            for ($i = $posIdx; $i < count($params); ++$i) {
+                if ($params[$i]->flags->contains(MetadataFlags::BY_REFERENCE)) {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+        if (isset($params[$posIdx])) {
+            return $params[$posIdx]->flags->contains(MetadataFlags::BY_REFERENCE);
+        }
+
+        return $last !== null && $last->flags->contains(MetadataFlags::VARIADIC) && $last->flags->contains(MetadataFlags::BY_REFERENCE);
+    }
+
+    /**
+     * @param ResolverState $state
+     */
+    private static function isThisOrAlias(SourceFile $source, Node $node, array $state): bool
+    {
+        $unwrapped = self::unwrap($source, $node);
+        if ($unwrapped === null || $unwrapped->kind !== NodeKind::DirectVariable) {
+            return false;
+        }
+
+        $name = $source->getText($unwrapped);
+
+        return $name === '$this' || isset($state['thisAliases'][$name]);
+    }
+
+    /**
+     * @param ResolverState $state
+     */
+    private static function killAliasedThisProperty(SourceFile $source, Node $node, array &$state, int &$nextId): void
+    {
+        $unwrapped = self::unwrap($source, $node);
+        if ($unwrapped === null) {
+            return;
+        }
+
+        $text = preg_replace('/\s+/', '', $source->getText($unwrapped)) ?? '';
+        $matches = [];
+        if (preg_match('/^(\$[A-Za-z_][A-Za-z0-9_]*)->([A-Za-z_][A-Za-z0-9_]*)$/', $text, $matches) === 1) {
+            if ($matches[1] === '$this' || isset($state['thisAliases'][$matches[1]])) {
+                self::killVar($state, '$this->' . $matches[2], $nextId);
+            }
+
+            return;
+        }
+
+        if (preg_match('/^(\$[A-Za-z_][A-Za-z0-9_]*)->/', $text, $matches) === 1) {
+            if ($matches[1] === '$this' || isset($state['thisAliases'][$matches[1]])) {
+                self::killThisProperties($state, $nextId);
+            }
+        }
+    }
+
+    /**
+     * @param ResolverState $state
+     */
+    private static function killThisProperties(array &$state, int &$nextId): void
+    {
+        $props = [];
+        foreach (array_keys($state['vars']) as $key) {
+            if (str_starts_with($key, '$this->')) {
+                $props[$key] = true;
+            }
+        }
+        foreach (array_keys($state['allowed']) as $id) {
+            if (str_starts_with($id, 'init:$this->')) {
+                $props[substr($id, 5)] = true;
+            }
+        }
+
+        foreach (array_keys($props) as $prop) {
+            self::killVar($state, $prop, $nextId);
+        }
+    }
+
+    /**
+     * @param ResolverState $state
      */
     private static function killCatchVariable(SourceFile $source, Node $catchNode, array &$state, int &$nextId): void
     {
         foreach ($source->getChildren($catchNode) as $child) {
             if ($child->kind === NodeKind::DirectVariable) {
-                self::killVar($state, $source->getText($child), $nextId);
+                $varName = $source->getText($child);
+                unset($state['thisAliases'][$varName]);
+                self::killVar($state, $varName, $nextId);
                 return;
             }
         }
     }
 
     /**
-     * @param list<array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool}> $branches
-     * @return array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool}
+     * @param list<ResolverState> $branches
+     * @return ResolverState
      */
     private static function joinStates(array $branches, int &$nextId): array
     {
@@ -874,7 +1298,7 @@ final class StrictAllowanceResolver
         }
 
         if ($live === []) {
-            return ['vars' => [], 'allowed' => [], 'refs' => [], 'terminated' => true];
+            return ['vars' => [], 'allowed' => [], 'refs' => [], 'thisAliases' => [], 'terminated' => true];
         }
 
         if (count($live) === 1) {
@@ -920,11 +1344,15 @@ final class StrictAllowanceResolver
         }
 
         $joinedRefs = [];
+        $joinedThisAliases = [];
         foreach ($live as $branch) {
             foreach ($branch['refs'] as $from => $targets) {
                 foreach ($targets as $to => $_) {
                     $joinedRefs[$from][$to] = true;
                 }
+            }
+            foreach ($branch['thisAliases'] as $alias => $_) {
+                $joinedThisAliases[$alias] = true;
             }
         }
 
@@ -932,6 +1360,7 @@ final class StrictAllowanceResolver
             'vars' => $joinedVars,
             'allowed' => $joinedAllowed,
             'refs' => $joinedRefs,
+            'thisAliases' => $joinedThisAliases,
             'terminated' => false,
         ];
     }
@@ -1282,7 +1711,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
     private static function varId(array $state, string $varName): string
     {
@@ -1290,7 +1719,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
     private static function killVar(array &$state, string $varName, int &$nextId): void
     {
@@ -1298,7 +1727,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
     private static function assignVarId(array &$state, string $varName, string $newId): void
     {
@@ -1324,7 +1753,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
     private static function linkRef(array &$state, string $a, string $b): void
     {
@@ -1337,7 +1766,7 @@ final class StrictAllowanceResolver
     }
 
     /**
-     * @param array{vars: array<string, string>, allowed: array<string, array<string, true>>, refs: array<string, array<string, true>>, terminated: bool} $state
+     * @param ResolverState $state
      */
     private static function detachRef(array &$state, string $varName): void
     {

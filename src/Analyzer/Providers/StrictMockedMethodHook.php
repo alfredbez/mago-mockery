@@ -10,7 +10,12 @@ use Mago\Sdk\Analyzer\MethodTarget;
 use Mago\Sdk\Analyzer\NodeAnalysisContext;
 use Mago\Sdk\Analyzer\Type;
 use Mago\Sdk\Analyzer\Type\ArrayKeyKind;
+use Mago\Sdk\Analyzer\Type\ClassLikeStringType;
+use Mago\Sdk\Analyzer\Type\ClassLikeStringVariant;
 use Mago\Sdk\Analyzer\Type\KeyedArrayType;
+use Mago\Sdk\Analyzer\Type\ScalarType;
+use Mago\Sdk\Analyzer\Type\StringLiteralKind;
+use Mago\Sdk\Analyzer\Type\StringType;
 use Mago\Sdk\Reporting\Issue;
 use Mago\Sdk\Reporting\Level;
 use Mago\Sdk\Span;
@@ -164,11 +169,13 @@ final class StrictMockedMethodHook implements MethodCallAnalysisHook
                 continue;
             }
 
-            $literal = $type->getLiteralString();
-            if ($literal !== null) {
-                $first = explode('->', $literal, 2)[0];
-                if ($first !== '') {
-                    $names[] = $first;
+            $literals = self::extractFiniteLiteralStrings($type);
+            if ($literals !== null) {
+                foreach ($literals as $literal) {
+                    $first = explode('->', $literal, 2)[0];
+                    if ($first !== '') {
+                        $names[] = $first;
+                    }
                 }
 
                 continue;
@@ -194,6 +201,43 @@ final class StrictMockedMethodHook implements MethodCallAnalysisHook
         return array_values(array_unique($names));
     }
 
+    /**
+     * Extracts every literal-string member of a finite union of literal strings,
+     * returning null if any member is non-literal (e.g. `string`, `mixed`, `null`).
+     *
+     * @return ?list<string>
+     */
+    private static function extractFiniteLiteralStrings(Type $type): ?array
+    {
+        $literals = [];
+        foreach ($type->atomicTypes as $atomic) {
+            if (!$atomic instanceof ScalarType) {
+                return null;
+            }
+
+            if ($atomic->refinement instanceof StringType) {
+                if ($atomic->refinement->literalKind !== StringLiteralKind::Value || $atomic->refinement->literalValue === null) {
+                    return null;
+                }
+                $literals[] = $atomic->refinement->literalValue;
+                continue;
+            }
+
+            if (
+                $atomic->refinement instanceof ClassLikeStringType
+                && $atomic->refinement->variant === ClassLikeStringVariant::Literal
+                && $atomic->refinement->literal !== null
+            ) {
+                $literals[] = $atomic->refinement->literal;
+                continue;
+            }
+
+            return null;
+        }
+
+        return $literals;
+    }
+
     private function isAllowedViaMockingMethod(NodeAnalysisContext $context, string $methodName): bool
     {
         if (stripos($context->source->contents, 'shouldAllowMockingMethod') === false) {
@@ -206,7 +250,7 @@ final class StrictMockedMethodHook implements MethodCallAnalysisHook
             return false;
         }
 
-        return StrictAllowanceResolver::isAllowed($source, $call, strtolower($methodName));
+        return StrictAllowanceResolver::isAllowed($source, $call, strtolower($methodName), $context->codebase);
     }
 
     private function findMethodCallBySpan(SourceFile $source, Span $targetSpan): ?Node

@@ -72,6 +72,15 @@ final class Before
 {
 }
 
+trait CrossFileNamedMockTrait
+{
+    #[Before]
+    public function registerCrossFileAlias(): void
+    {
+        \Mockery::namedMock('CrossFileTraitBeforeAlias', Greeter::class);
+    }
+}
+
 class Support
 {
     public function acceptGreeter(Greeter&MockInterface $greeter): void

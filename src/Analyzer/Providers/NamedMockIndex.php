@@ -12,21 +12,35 @@ use Mago\Sdk\Syntax\NodeKind;
 use Mago\Sdk\Syntax\SourceFile;
 
 use function array_key_exists;
+use function array_keys;
+use function array_pop;
 use function array_values;
 use function count;
+use function implode;
 use function ltrim;
 use function preg_match;
+use function sort;
 use function stripos;
 use function strlen;
 use function strpos;
 use function strtolower;
 use function substr;
+use function trim;
 
 /**
- * Indexes same-file `namedMock()` targets for `fetchMock()` calls by exact call span.
+ * Indexes `namedMock()` targets for `fetchMock()` calls by exact call span,
+ * supporting enclosing callable scopes (closures/arrow functions), trait lifecycle
+ * hooks (`setUp`, `#[Before]`, `startMockery`, `mockeryTestSetUp`), and branch
+ * dominance before shadowing lifecycle aliases.
  *
- * Cross-file `fetchMock()` calls remain unresolved; span collisions across files with
- * differing targets degrade conservatively to unresolved.
+ * @phpstan-type TargetSet non-empty-list<string>
+ * @phpstan-type MethodAliasEntry array{end: int, targets: ?TargetSet, node: Node}
+ * @phpstan-type FetchRecord array{
+ *     localSets: list<TargetSet>,
+ *     dominated: bool,
+ *     unresolved: bool,
+ *     usedTraits: list<string>
+ * }
  *
  * @internal
  */
@@ -38,11 +52,67 @@ final class NamedMockIndex implements CodebaseScanHook
         'mockerytestsetup' => true,
     ];
 
-    /** @var array<string, list<string>|null> */
-    private array $fetchTargetsByKey = [];
+    private const CONDITIONAL_ANCESTOR_KINDS = [
+        NodeKind::If->value => true,
+        NodeKind::IfBody->value => true,
+        NodeKind::IfStatementBody->value => true,
+        NodeKind::IfStatementBodyElseClause->value => true,
+        NodeKind::IfStatementBodyElseIfClause->value => true,
+        NodeKind::IfColonDelimitedBody->value => true,
+        NodeKind::IfColonDelimitedBodyElseClause->value => true,
+        NodeKind::IfColonDelimitedBodyElseIfClause->value => true,
+        NodeKind::Switch->value => true,
+        NodeKind::SwitchCase->value => true,
+        NodeKind::SwitchExpressionCase->value => true,
+        NodeKind::SwitchDefaultCase->value => true,
+        NodeKind::While->value => true,
+        NodeKind::DoWhile->value => true,
+        NodeKind::For->value => true,
+        NodeKind::Foreach->value => true,
+        NodeKind::Try->value => true,
+        NodeKind::TryCatchClause->value => true,
+        NodeKind::Conditional->value => true,
+        NodeKind::Match->value => true,
+        NodeKind::MatchArm->value => true,
+        NodeKind::MatchExpressionArm->value => true,
+        NodeKind::MatchDefaultArm->value => true,
+        NodeKind::Closure->value => true,
+        NodeKind::ArrowFunction->value => true,
+    ];
+
+    private const NON_DOMINATING_LCA_KINDS = [
+        NodeKind::If->value => true,
+        NodeKind::IfBody->value => true,
+        NodeKind::IfStatementBody->value => true,
+        NodeKind::IfColonDelimitedBody->value => true,
+        NodeKind::Switch->value => true,
+        NodeKind::SwitchBody->value => true,
+        NodeKind::SwitchBraceDelimitedBody->value => true,
+        NodeKind::SwitchColonDelimitedBody->value => true,
+        NodeKind::Match->value => true,
+        NodeKind::Try->value => true,
+        NodeKind::Conditional->value => true,
+    ];
+
+    private const SHORT_CIRCUIT_OPERATORS = [
+        '&&' => true,
+        '||' => true,
+        'and' => true,
+        'or' => true,
+        '??' => true,
+    ];
+
+    /** @var array<string, FetchRecord> */
+    private array $fetchRecordsByKey = [];
 
     /** @var array<string, true> */
     private array $ambiguousKeys = [];
+
+    /** @var array<string, array<string, ?TargetSet>> */
+    private array $traitLifecycle = [];
+
+    /** @var array<string, list<string>> */
+    private array $traitParents = [];
 
     public function getTargets(): array
     {
@@ -52,43 +122,150 @@ final class NamedMockIndex implements CodebaseScanHook
     public function scan(CodebaseScanContext $context): void
     {
         if ($context->firstBatch) {
-            $this->fetchTargetsByKey = [];
+            $this->fetchRecordsByKey = [];
             $this->ambiguousKeys = [];
+            $this->traitLifecycle = [];
+            $this->traitParents = [];
         }
 
         foreach ($context->files as $source) {
-            if (stripos($source->contents, 'fetchMock') === false) {
+            $hasFetch = stripos($source->contents, 'fetchMock') !== false;
+            $hasNamed = stripos($source->contents, 'namedMock') !== false;
+            $hasTrait = stripos($source->contents, 'trait') !== false;
+
+            if (!$hasFetch && !$hasNamed && !$hasTrait) {
                 continue;
             }
 
-            $fileAliases = stripos($source->contents, 'namedMock') !== false
-                ? self::collectFileNamedMocks($source)
+            if ($hasTrait) {
+                self::recordTraitUses($source, $this->traitParents);
+            }
+
+            $fileAliases = $hasNamed
+                ? self::collectFileNamedMocks($source, $this->traitLifecycle)
                 : ['methods' => [], 'lifecycle' => []];
 
-            self::recordFileFetchCalls($source, $fileAliases, $this->fetchTargetsByKey, $this->ambiguousKeys);
+            if ($hasFetch) {
+                self::recordFileFetchCalls($source, $fileAliases, $this->fetchRecordsByKey, $this->ambiguousKeys);
+            }
         }
     }
 
     /**
-     * @return list<string>|null
+     * @return ?TargetSet
      */
     public function targetsForFetch(Span $span, string $name): ?array
     {
-        $key = $span->start . ':' . $span->end . "\0" . $name;
-        if (isset($this->ambiguousKeys[$key])) {
+        $sets = $this->targetSetsForFetch($span, $name);
+        if ($sets === null || count($sets) !== 1) {
             return null;
         }
 
-        return $this->fetchTargetsByKey[$key] ?? null;
+        return $sets[0];
     }
 
     /**
+     * @return ?non-empty-list<TargetSet>
+     */
+    public function targetSetsForFetch(Span $span, string $name): ?array
+    {
+        $key = $span->start . ':' . $span->end . "\0" . $name;
+        if (isset($this->ambiguousKeys[$key]) || !isset($this->fetchRecordsByKey[$key])) {
+            return null;
+        }
+
+        $record = $this->fetchRecordsByKey[$key];
+        if ($record['unresolved']) {
+            return null;
+        }
+
+        $sets = $record['localSets'];
+        if (!$record['dominated'] && $record['usedTraits'] !== []) {
+            $traitSets = $this->collectTraitLifecycleTargets($record['usedTraits'], $name);
+            if ($traitSets === null) {
+                return null;
+            }
+            foreach ($traitSets as $set) {
+                $sets[] = $set;
+            }
+        }
+
+        $unique = self::dedupeTargetSets($sets);
+
+        return $unique !== [] ? $unique : null;
+    }
+
+    /**
+     * @param list<string> $initialTraits
+     * @return ?list<TargetSet> Null indicates an ambiguous/unresolvable trait lifecycle registration.
+     */
+    private function collectTraitLifecycleTargets(array $initialTraits, string $aliasName): ?array
+    {
+        $sets = [];
+        $visited = [];
+        $queue = $initialTraits;
+
+        while (($traitLower = array_pop($queue)) !== null) {
+            if (isset($visited[$traitLower])) {
+                continue;
+            }
+            $visited[$traitLower] = true;
+
+            if (isset($this->traitLifecycle[$traitLower]) && array_key_exists($aliasName, $this->traitLifecycle[$traitLower])) {
+                $targets = $this->traitLifecycle[$traitLower][$aliasName];
+                if ($targets === null) {
+                    return null;
+                }
+                $sets[] = $targets;
+            }
+
+            foreach ($this->traitParents[$traitLower] ?? [] as $parentTrait) {
+                if (!isset($visited[$parentTrait])) {
+                    $queue[] = $parentTrait;
+                }
+            }
+        }
+
+        return $sets;
+    }
+
+    /**
+     * @param array<string, list<string>> $traitParents
+     */
+    private static function recordTraitUses(SourceFile $source, array &$traitParents): void
+    {
+        foreach ($source->getNodes(NodeKind::Trait) as $traitNode) {
+            $fqcn = self::classLikeFqcn($source, $traitNode);
+            if ($fqcn === null) {
+                continue;
+            }
+
+            $used = self::usedTraitsOfClassLike($source, $traitNode);
+            if ($used === []) {
+                continue;
+            }
+
+            $lower = strtolower($fqcn);
+            $existing = $traitParents[$lower] ?? [];
+            $merged = [];
+            foreach ($existing as $t) {
+                $merged[$t] = true;
+            }
+            foreach ($used as $t) {
+                $merged[$t] = true;
+            }
+            $traitParents[$lower] = array_keys($merged);
+        }
+    }
+
+    /**
+     * @param array<string, array<string, ?TargetSet>> $traitLifecycle
      * @return array{
-     *     methods: array<string, array<string, list<array{end: int, targets: list<string>|null}>>>,
-     *     lifecycle: array<string, array<string, list<string>|null>>
+     *     methods: array<string, array<string, list<MethodAliasEntry>>>,
+     *     lifecycle: array<string, array<string, ?TargetSet>>
      * }
      */
-    private static function collectFileNamedMocks(SourceFile $source): array
+    private static function collectFileNamedMocks(SourceFile $source, array &$traitLifecycle): array
     {
         $aliases = ['methods' => [], 'lifecycle' => []];
 
@@ -100,7 +277,7 @@ final class NamedMockIndex implements CodebaseScanHook
             if (!self::isMockeryStaticReceiver($source, $call)) {
                 continue;
             }
-            self::extractNamedMockCall($source, $call, $aliases);
+            self::extractNamedMockCall($source, $call, $aliases, $traitLifecycle);
         }
 
         foreach ($source->getNodes(NodeKind::FunctionCall) as $call) {
@@ -108,7 +285,7 @@ final class NamedMockIndex implements CodebaseScanHook
             if ($func === null || strtolower(ltrim($func, '\\')) !== 'namedmock') {
                 continue;
             }
-            self::extractNamedMockCall($source, $call, $aliases);
+            self::extractNamedMockCall($source, $call, $aliases, $traitLifecycle);
         }
 
         return $aliases;
@@ -116,12 +293,17 @@ final class NamedMockIndex implements CodebaseScanHook
 
     /**
      * @param array{
-     *     methods: array<string, array<string, list<array{end: int, targets: list<string>|null}>>>,
-     *     lifecycle: array<string, array<string, list<string>|null>>
+     *     methods: array<string, array<string, list<MethodAliasEntry>>>,
+     *     lifecycle: array<string, array<string, ?TargetSet>>
      * } $aliases
+     * @param array<string, array<string, ?TargetSet>> $traitLifecycle
      */
-    private static function extractNamedMockCall(SourceFile $source, Node $call, array &$aliases): void
-    {
+    private static function extractNamedMockCall(
+        SourceFile $source,
+        Node $call,
+        array &$aliases,
+        array &$traitLifecycle,
+    ): void {
         $argList = self::findChildOfKind($source, $call, NodeKind::ArgumentList);
         if ($argList === null) {
             return;
@@ -147,16 +329,18 @@ final class NamedMockIndex implements CodebaseScanHook
         $resolved = $targets !== [] ? array_values($targets) : null;
         $callable = self::enclosingCallable($source, $call);
         if ($callable !== null && self::isLifecycleCallable($source, $callable)) {
-            $classKey = self::enclosingClassKey($source, $call);
-            if ($classKey !== null) {
-                $aliases['lifecycle'][$classKey] ??= [];
-                if (array_key_exists($aliasName, $aliases['lifecycle'][$classKey])) {
-                    if ($aliases['lifecycle'][$classKey][$aliasName] !== $resolved) {
-                        $aliases['lifecycle'][$classKey][$aliasName] = null;
+            $classNode = self::enclosingClassNode($source, $call);
+            if ($classNode !== null) {
+                $classKey = $classNode->span->start . ':' . $classNode->span->end;
+                self::recordLifecycleEntry($aliases['lifecycle'], $classKey, $aliasName, $resolved);
+
+                if ($classNode->kind === NodeKind::Trait) {
+                    $traitFqcn = self::classLikeFqcn($source, $classNode);
+                    if ($traitFqcn !== null) {
+                        self::recordLifecycleEntry($traitLifecycle, strtolower($traitFqcn), $aliasName, $resolved);
                     }
-                    return;
                 }
-                $aliases['lifecycle'][$classKey][$aliasName] = $resolved;
+
                 return;
             }
         }
@@ -165,21 +349,40 @@ final class NamedMockIndex implements CodebaseScanHook
         $aliases['methods'][$scopeKey][$aliasName][] = [
             'end' => $call->span->end,
             'targets' => $resolved,
+            'node' => $call,
         ];
     }
 
     /**
+     * @param array<string, array<string, ?TargetSet>> $table
+     * @param ?TargetSet $resolved
+     */
+    private static function recordLifecycleEntry(array &$table, string $ownerKey, string $aliasName, ?array $resolved): void
+    {
+        $table[$ownerKey] ??= [];
+        if (array_key_exists($aliasName, $table[$ownerKey])) {
+            if ($table[$ownerKey][$aliasName] !== $resolved) {
+                $table[$ownerKey][$aliasName] = null;
+            }
+
+            return;
+        }
+
+        $table[$ownerKey][$aliasName] = $resolved;
+    }
+
+    /**
      * @param array{
-     *     methods: array<string, array<string, list<array{end: int, targets: list<string>|null}>>>,
-     *     lifecycle: array<string, array<string, list<string>|null>>
+     *     methods: array<string, array<string, list<MethodAliasEntry>>>,
+     *     lifecycle: array<string, array<string, ?TargetSet>>
      * } $fileAliases
-     * @param array<string, list<string>|null> $fetchTargetsByKey
+     * @param array<string, FetchRecord> $fetchRecordsByKey
      * @param array<string, true> $ambiguousKeys
      */
     private static function recordFileFetchCalls(
         SourceFile $source,
         array $fileAliases,
-        array &$fetchTargetsByKey,
+        array &$fetchRecordsByKey,
         array &$ambiguousKeys,
     ): void {
         foreach ([NodeKind::StaticMethodCall, NodeKind::MethodCall] as $kind) {
@@ -214,18 +417,179 @@ final class NamedMockIndex implements CodebaseScanHook
                     continue;
                 }
 
-                $targets = self::targetsForFetchInScope($source, $call, $fetchName, $fileAliases);
-                if (array_key_exists($key, $fetchTargetsByKey)) {
-                    if ($fetchTargetsByKey[$key] !== $targets) {
+                $record = self::buildFetchRecord($source, $call, $fetchName, $fileAliases);
+                if (array_key_exists($key, $fetchRecordsByKey)) {
+                    if ($fetchRecordsByKey[$key] !== $record) {
                         $ambiguousKeys[$key] = true;
-                        unset($fetchTargetsByKey[$key]);
+                        unset($fetchRecordsByKey[$key]);
                     }
                     continue;
                 }
 
-                $fetchTargetsByKey[$key] = $targets;
+                $fetchRecordsByKey[$key] = $record;
             }
         }
+    }
+
+    /**
+     * @param array{
+     *     methods: array<string, array<string, list<MethodAliasEntry>>>,
+     *     lifecycle: array<string, array<string, ?TargetSet>>
+     * } $fileAliases
+     * @return FetchRecord
+     */
+    private static function buildFetchRecord(
+        SourceFile $source,
+        Node $call,
+        string $fetchName,
+        array $fileAliases,
+    ): array {
+        $callableChain = self::enclosingCallableChain($source, $call);
+        $scopes = [];
+        foreach ($callableChain as $callable) {
+            $scopes[] = [
+                'key' => $callable->span->start . ':' . $callable->span->end,
+                'node' => $callable,
+            ];
+        }
+        $outermost = $callableChain !== [] ? $callableChain[count($callableChain) - 1] : null;
+        if ($outermost === null || ($outermost->kind !== NodeKind::Method && $outermost->kind !== NodeKind::Function)) {
+            $scopes[] = ['key' => '__top__', 'node' => null];
+        }
+
+        $localSets = [];
+        $dominated = false;
+        $unresolved = false;
+
+        foreach ($scopes as $scope) {
+            $entries = $fileAliases['methods'][$scope['key']][$fetchName] ?? [];
+            if ($entries === []) {
+                continue;
+            }
+
+            /** @var ?MethodAliasEntry $latestDominating */
+            $latestDominating = null;
+            /** @var list<MethodAliasEntry> $conditionals */
+            $conditionals = [];
+
+            foreach ($entries as $entry) {
+                if ($entry['end'] > $call->span->start) {
+                    continue;
+                }
+
+                if (self::entryDominatesCall($source, $entry['node'], $call, $scope['node'])) {
+                    $latestDominating = $entry;
+                    $conditionals = [];
+                } else {
+                    $conditionals[] = $entry;
+                }
+            }
+
+            foreach ($conditionals as $cond) {
+                if ($cond['targets'] === null) {
+                    $unresolved = true;
+                } else {
+                    $localSets[] = $cond['targets'];
+                }
+            }
+
+            if ($latestDominating !== null) {
+                if ($latestDominating['targets'] === null) {
+                    $unresolved = true;
+                } else {
+                    $localSets[] = $latestDominating['targets'];
+                }
+                $dominated = true;
+                break;
+            }
+        }
+
+        $usedTraits = [];
+        if (!$dominated) {
+            $classNode = self::enclosingClassNode($source, $call);
+            if ($classNode !== null) {
+                $classKey = $classNode->span->start . ':' . $classNode->span->end;
+                if (array_key_exists($fetchName, $fileAliases['lifecycle'][$classKey] ?? [])) {
+                    $lifecycleTargets = $fileAliases['lifecycle'][$classKey][$fetchName];
+                    if ($lifecycleTargets === null) {
+                        $unresolved = true;
+                    } else {
+                        $localSets[] = $lifecycleTargets;
+                    }
+                }
+                $usedTraits = self::usedTraitsOfClassLike($source, $classNode);
+            }
+        }
+
+        sort($usedTraits);
+
+        return [
+            'localSets' => self::dedupeTargetSets($localSets),
+            'dominated' => $dominated,
+            'unresolved' => $unresolved,
+            'usedTraits' => $usedTraits,
+        ];
+    }
+
+    private static function entryDominatesCall(SourceFile $source, Node $entryNode, Node $call, ?Node $scopeNode): bool
+    {
+        if ($entryNode->span->end > $call->span->start) {
+            return false;
+        }
+
+        $current = $entryNode;
+        while ($current !== null) {
+            $parent = $source->getParent($current);
+            if ($parent === null) {
+                return true;
+            }
+
+            if ($parent->kind === NodeKind::Binary) {
+                $children = $source->getChildren($parent);
+                $op = isset($children[1]) ? strtolower(trim($source->getText($children[1]))) : '';
+                if (isset(self::SHORT_CIRCUIT_OPERATORS[$op]) && isset($children[2]) && $children[2]->id === $current->id) {
+                    return false;
+                }
+            }
+
+            if ($parent->span->start <= $call->span->start && $parent->span->end >= $call->span->end) {
+                return !isset(self::NON_DOMINATING_LCA_KINDS[$parent->kind->value]);
+            }
+
+            if (isset(self::CONDITIONAL_ANCESTOR_KINDS[$parent->kind->value])) {
+                return false;
+            }
+
+            if ($scopeNode !== null && $parent->id === $scopeNode->id) {
+                return true;
+            }
+
+            $current = $parent;
+        }
+
+        return true;
+    }
+
+    /**
+     * @param list<TargetSet> $sets
+     * @return list<TargetSet>
+     */
+    private static function dedupeTargetSets(array $sets): array
+    {
+        $unique = [];
+        foreach ($sets as $set) {
+            $normalized = [];
+            foreach ($set as $name) {
+                $normalized[] = strtolower($name);
+            }
+            sort($normalized);
+            $sig = implode("\0", $normalized);
+            if (!isset($unique[$sig])) {
+                $unique[$sig] = $set;
+            }
+        }
+
+        return array_values($unique);
     }
 
     /**
@@ -366,56 +730,50 @@ final class NamedMockIndex implements CodebaseScanHook
         return null;
     }
 
-    /**
-     * @param array{
-     *     methods: array<string, array<string, list<array{end: int, targets: list<string>|null}>>>,
-     *     lifecycle: array<string, array<string, list<string>|null>>
-     * } $fileAliases
-     * @return list<string>|null
-     */
-    private static function targetsForFetchInScope(
-        SourceFile $source,
-        Node $call,
-        string $fetchName,
-        array $fileAliases,
-    ): ?array {
-        $callable = self::enclosingCallable($source, $call);
-        $scopeKey = $callable !== null ? $callable->span->start . ':' . $callable->span->end : '__top__';
-        $entries = $fileAliases['methods'][$scopeKey][$fetchName] ?? [];
-        $matched = false;
-        $resolved = null;
-        foreach ($entries as $entry) {
-            if ($entry['end'] > $call->span->start) {
-                continue;
-            }
-            if (!$matched) {
-                $matched = true;
-                $resolved = $entry['targets'];
-            } elseif ($resolved !== $entry['targets']) {
-                return null;
-            }
-        }
-        if ($matched) {
-            return $resolved;
-        }
+    private static function enclosingCallable(SourceFile $source, Node $node): ?Node
+    {
+        $chain = self::enclosingCallableChain($source, $node);
 
-        $classKey = self::enclosingClassKey($source, $call);
-        if ($classKey !== null && array_key_exists($fetchName, $fileAliases['lifecycle'][$classKey] ?? [])) {
-            return $fileAliases['lifecycle'][$classKey][$fetchName];
-        }
-
-        return null;
+        return $chain[0] ?? null;
     }
 
-    private static function enclosingCallable(SourceFile $source, Node $node): ?Node
+    /**
+     * Returns enclosing callables from innermost to outermost, walking out of closures
+     * and arrow functions into their enclosing method or function.
+     *
+     * @return list<Node>
+     */
+    private static function enclosingCallableChain(SourceFile $source, Node $node): array
+    {
+        $chain = [];
+        $current = $source->getParent($node);
+        while ($current !== null) {
+            if ($current->kind === NodeKind::Closure || $current->kind === NodeKind::ArrowFunction) {
+                $chain[] = $current;
+            } elseif ($current->kind === NodeKind::Method || $current->kind === NodeKind::Function) {
+                $chain[] = $current;
+                break;
+            } elseif (
+                $current->kind === NodeKind::Class_
+                || $current->kind === NodeKind::AnonymousClass
+                || $current->kind === NodeKind::Trait
+            ) {
+                break;
+            }
+            $current = $source->getParent($current);
+        }
+
+        return $chain;
+    }
+
+    private static function enclosingClassNode(SourceFile $source, Node $node): ?Node
     {
         $current = $source->getParent($node);
         while ($current !== null) {
             if (
-                $current->kind === NodeKind::Method
-                || $current->kind === NodeKind::Function
-                || $current->kind === NodeKind::Closure
-                || $current->kind === NodeKind::ArrowFunction
+                $current->kind === NodeKind::Class_
+                || $current->kind === NodeKind::AnonymousClass
+                || $current->kind === NodeKind::Trait
             ) {
                 return $current;
             }
@@ -425,17 +783,112 @@ final class NamedMockIndex implements CodebaseScanHook
         return null;
     }
 
-    private static function enclosingClassKey(SourceFile $source, Node $node): ?string
+    private static function classLikeFqcn(SourceFile $source, Node $classLike): ?string
+    {
+        $resolved = $source->getResolvedName($classLike)?->name;
+        if ($resolved !== null && $resolved !== '') {
+            return ltrim($resolved, '\\');
+        }
+
+        foreach ($source->getChildren($classLike) as $child) {
+            if ($child->kind === NodeKind::LocalIdentifier) {
+                $childResolved = $source->getResolvedName($child)?->name;
+                if ($childResolved !== null && $childResolved !== '') {
+                    return ltrim($childResolved, '\\');
+                }
+
+                $shortName = trim($source->getText($child));
+                if ($shortName === '') {
+                    return null;
+                }
+
+                $ns = self::enclosingNamespaceName($source, $classLike);
+
+                return $ns !== '' ? $ns . '\\' . $shortName : $shortName;
+            }
+        }
+
+        return null;
+    }
+
+    private static function enclosingNamespaceName(SourceFile $source, Node $node): string
     {
         $current = $source->getParent($node);
         while ($current !== null) {
-            if ($current->kind === NodeKind::Class_ || $current->kind === NodeKind::AnonymousClass) {
-                return $current->span->start . ':' . $current->span->end;
+            if ($current->kind->value === 'Namespace') {
+                foreach ($source->getChildren($current) as $child) {
+                    $ident = self::unwrap($source, $child);
+                    if (
+                        $ident !== null
+                        && (
+                            $ident->kind === NodeKind::LocalIdentifier
+                            || $ident->kind === NodeKind::QualifiedIdentifier
+                            || $ident->kind === NodeKind::FullyQualifiedIdentifier
+                        )
+                    ) {
+                        return ltrim(trim($source->getText($ident)), '\\');
+                    }
+                }
+
+                return '';
             }
             $current = $source->getParent($current);
         }
 
-        return null;
+        return '';
+    }
+
+    /**
+     * @return list<string> Lowercased FQCNs of traits directly used by $classLike.
+     */
+    private static function usedTraitsOfClassLike(SourceFile $source, Node $classLike): array
+    {
+        $used = [];
+        foreach ($source->getDescendants($classLike, NodeKind::TraitUse) as $traitUse) {
+            if (self::enclosingClassNode($source, $traitUse)?->id !== $classLike->id) {
+                continue;
+            }
+
+            foreach ($source->getChildren($traitUse) as $child) {
+                if (
+                    $child->kind === NodeKind::TraitUseSpecification
+                    || $child->kind === NodeKind::TraitUseAbstractSpecification
+                    || $child->kind === NodeKind::TraitUseConcreteSpecification
+                ) {
+                    continue;
+                }
+
+                $ident = self::unwrap($source, $child);
+                if (
+                    $ident === null
+                    || (
+                        $ident->kind !== NodeKind::LocalIdentifier
+                        && $ident->kind !== NodeKind::QualifiedIdentifier
+                        && $ident->kind !== NodeKind::FullyQualifiedIdentifier
+                    )
+                ) {
+                    continue;
+                }
+
+                $resolved = $source->getResolvedName($ident)?->name ?? $source->getResolvedName($child)?->name;
+                if ($resolved === null || $resolved === '') {
+                    $raw = ltrim(trim($source->getText($ident)), '\\');
+                    if ($raw === '') {
+                        continue;
+                    }
+                    if ($ident->kind !== NodeKind::FullyQualifiedIdentifier) {
+                        $ns = self::enclosingNamespaceName($source, $classLike);
+                        $resolved = $ns !== '' ? $ns . '\\' . $raw : $raw;
+                    } else {
+                        $resolved = $raw;
+                    }
+                }
+
+                $used[strtolower(ltrim($resolved, '\\'))] = true;
+            }
+        }
+
+        return array_keys($used);
     }
 
     private static function isLifecycleCallable(SourceFile $source, Node $callable): bool

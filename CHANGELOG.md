@@ -6,6 +6,19 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [1.0.2] - 2026-11-27
+
+### Fixed
+
+- Added `CallableSignatureOverride` support for `Mockery::mock()`, `Mockery::spy()`, `Mockery::namedMock()`, `Mockery::instanceMock()`, `Container::mock()`, global `mock()`, `spy()`, and `namedMock()`, and `LegacyMockInterface::shouldReceive()` / `shouldNotReceive()` so valid expectation maps, constructor argument arrays, and `namedMock()` alias strings pass on Mockery 1.6.12 through 1.6.15 without external stubs while invalid shapes remain rejected.
+- `MockTypeFactory::fromInvocation()` preserves template parameter `T` intersected with `MockInterface` for generic `class-string<T>` arguments.
+- `ExpectationAndMatcherSignatureProvider::getReturnType()` preserves `T&MockInterface` across `makePartial()`, `byDefault()`, `shouldAllowMockingProtectedMethods()`, `shouldAllowMockingMethod()`, and `shouldDeferMissing()` on Mockery 1.6.12 docblocks.
+- `CompositeExpectationProvider` classifies array emptiness across unions containing `array{}` (such as `array{}|array{greet: string}` and `array{}|non-empty-array<string, string>`), preserving `HigherOrderMessage|(T&MockInterface)`.
+- `TraitMockExpressionEvaluator` preserves `static` local mock provenance across known non-reentrant Mockery calls without partial-mock constructor specs, and `TraitMockFlowAnalyzer::hasLoopControlJump()` tracks nested `switch` and loop depths with numeric `break N` / `continue N` levels inside `do ... while (false)`.
+- `NamedMockIndex` walks out of closures and arrow functions, indexes trait lifecycle hooks (respecting class overrides and `insteadof`), sorts scope entries in source order, enforces dominance (including nullsafe and `??=` short-circuits) before shadowing lifecycle aliases, and avoids PHP 8.2+ enum constant expressions for PHP 8.1 compatibility.
+- `StrictAllowanceResolver` invalidates `$this->*` allowances on user helper calls and `$self = $this` aliases while exempting `PHPUnit\Framework\*` and `Mockery\*` calls, restricts chain stripping to fluent methods, and tracks by-reference calls and unpacked reference arguments; `StrictMockedMethodHook` checks every member of finite literal-string unions with case-insensitive deduplication.
+- Documented `-d memory_limit=512M` worker headroom for large codebases in `README.md`.
+
 ## [1.0.1] - 2026-11-26
 
 ### Changed
